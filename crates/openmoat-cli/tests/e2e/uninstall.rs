@@ -4,6 +4,8 @@ use std::fs;
 use std::path::Path;
 
 use crate::common::{DENY, OK, Sandbox, USAGE, output, squash, stdout, text};
+use crate::hosts::{dir_of, hook_file, hook_file_name, mcp_user_file};
+use openmoat_hosts::Host;
 
 /// `moat init` as a person at a terminal answering `answers`.
 fn init_answering(sb: &Sandbox, answers: &str) -> std::process::Output {
@@ -35,7 +37,7 @@ fn backups_in(dir: &Path) -> Vec<String> {
 
 #[test]
 fn init_without_a_terminal_changes_no_agent() {
-    let sb = Sandbox::bare(&[".claude", ".codex"]);
+    let sb = Sandbox::bare(&[&dir_of(Host::ClaudeCode), &dir_of(Host::Codex)]);
     let out = sb.moat(&["init"]);
     assert_eq!(out.status.code(), Some(OK), "{}", text(&out));
     assert!(
@@ -44,14 +46,14 @@ fn init_without_a_terminal_changes_no_agent() {
         text(&out)
     );
     assert!(sb.home.join(".moat/policy.yaml").is_file());
-    assert!(!sb.home.join(".claude/settings.json").exists());
-    assert!(!sb.home.join(".codex/hooks.json").exists());
-    assert!(!sb.home.join(".codex/config.toml").exists());
+    assert!(!hook_file(&sb, Host::ClaudeCode).exists());
+    assert!(!hook_file(&sb, Host::Codex).exists());
+    assert!(!mcp_user_file(&sb, Host::Codex).exists());
 }
 
 #[test]
 fn init_asks_per_agent_and_changes_only_the_accepted_ones() {
-    let sb = Sandbox::bare(&[".claude", ".codex"]);
+    let sb = Sandbox::bare(&[&dir_of(Host::ClaudeCode), &dir_of(Host::Codex)]);
     let out = init_answering(&sb, "\nn\n");
     assert_eq!(out.status.code(), Some(OK), "{}", text(&out));
     let shown = squash(&stdout(&out));
@@ -72,21 +74,21 @@ fn init_asks_per_agent_and_changes_only_the_accepted_ones() {
         shown.contains("undo everything: openmoat uninstall"),
         "{shown}"
     );
-    assert!(sb.home.join(".claude/settings.json").is_file());
-    assert!(!sb.home.join(".codex/hooks.json").exists());
-    assert!(!sb.home.join(".codex/config.toml").exists());
+    assert!(hook_file(&sb, Host::ClaudeCode).is_file());
+    assert!(!hook_file(&sb, Host::Codex).exists());
+    assert!(!mcp_user_file(&sb, Host::Codex).exists());
 
-    let declined = Sandbox::bare(&[".claude"]);
+    let declined = Sandbox::bare(&[&dir_of(Host::ClaudeCode)]);
     let out = init_answering(&declined, "");
     assert!(stdout(&out).contains("No agent accepted"), "{}", text(&out));
-    assert!(!declined.home.join(".claude/settings.json").exists());
+    assert!(!hook_file(&declined, Host::ClaudeCode).exists());
 }
 
 /// An agent whose files need no change is not asked again: a yes would
 /// change nothing. One that does need a change still is.
 #[test]
 fn init_asks_only_about_agents_that_would_change() {
-    let sb = Sandbox::bare(&[".claude", ".codex"]);
+    let sb = Sandbox::bare(&[&dir_of(Host::ClaudeCode), &dir_of(Host::Codex)]);
     let out = init_answering(&sb, "\nn\n");
     assert_eq!(out.status.code(), Some(OK), "{}", text(&out));
     // Claude Code is set up now; Codex was declined.
@@ -103,7 +105,7 @@ fn init_asks_only_about_agents_that_would_change() {
         shown.contains(&format!(" Codex ~{main}.codex adds hook")),
         "{shown}"
     );
-    assert!(!sb.home.join(".codex/hooks.json").exists());
+    assert!(!hook_file(&sb, Host::Codex).exists());
     assert!(shown.contains("✔ 1 agent protected"), "{shown}");
     // Nothing changed for Claude Code: no restart, no trust step.
     assert!(!shown.contains("Restart your agents"), "{shown}");
@@ -114,7 +116,7 @@ fn init_asks_only_about_agents_that_would_change() {
 /// or edited, lines, the settings it sets), not the whole diff.
 #[test]
 fn init_sums_up_each_agents_changes_before_asking() {
-    let sb = Sandbox::bare(&[".claude", ".codex"]);
+    let sb = Sandbox::bare(&[&dir_of(Host::ClaudeCode), &dir_of(Host::Codex)]);
     let out = init_answering(&sb, "\nn\n");
     let shown = stdout(&out);
     // native Windows has no OS sandbox for Claude Code
@@ -127,7 +129,7 @@ fn init_sums_up_each_agents_changes_before_asking() {
     assert!(shown[..first].contains(claude), "{shown}");
     assert!(!shown.contains("settings.json: new file"), "{shown}");
 
-    let sb = Sandbox::bare(&[".claude", ".codex"]);
+    let sb = Sandbox::bare(&[&dir_of(Host::ClaudeCode), &dir_of(Host::Codex)]);
     let out = init_with(&sb, &["--verbose"], "\nn\n");
     assert_eq!(out.status.code(), Some(OK), "{}", text(&out));
     let shown = stdout(&out);
@@ -148,8 +150,8 @@ fn init_sums_up_each_agents_changes_before_asking() {
     assert!(shown.contains("hooks.json: new file, +"), "{shown}");
     assert!(shown.contains("config.toml: new file, +"), "{shown}");
     assert!(!shown.contains("(after openmoat init)"), "{shown}");
-    assert!(sb.home.join(".claude/settings.json").is_file());
-    assert!(!sb.home.join(".codex/hooks.json").exists());
+    assert!(hook_file(&sb, Host::ClaudeCode).is_file());
+    assert!(!hook_file(&sb, Host::Codex).exists());
 }
 
 /// Answering `d` shows the full diff of every file the agent would get, hooks
@@ -157,7 +159,7 @@ fn init_sums_up_each_agents_changes_before_asking() {
 /// as they were.
 #[test]
 fn init_shows_the_full_diff_on_d_and_asks_again() {
-    let sb = Sandbox::bare(&[".claude", ".codex"]);
+    let sb = Sandbox::bare(&[&dir_of(Host::ClaudeCode), &dir_of(Host::Codex)]);
     let out = init_answering(&sb, "d\n\nd\nn\n");
     assert_eq!(out.status.code(), Some(OK), "{}", text(&out));
     let shown = stdout(&out);
@@ -205,18 +207,18 @@ fn init_shows_the_full_diff_on_d_and_asks_again() {
             .any(|l| l.starts_with('+') && l.contains("\"onFailure\": \"block\"")),
         "{shown}"
     );
-    assert!(sb.home.join(".claude/settings.json").is_file());
-    assert!(!sb.home.join(".codex/hooks.json").exists());
+    assert!(hook_file(&sb, Host::ClaudeCode).is_file());
+    assert!(!hook_file(&sb, Host::Codex).exists());
 }
 
 #[test]
 fn init_hosts_leaves_other_agents_untouched() {
-    let sb = Sandbox::bare(&[".claude", ".codex"]);
-    let out = sb.moat(&["init", "--hosts", "claude-code"]);
+    let sb = Sandbox::bare(&[&dir_of(Host::ClaudeCode), &dir_of(Host::Codex)]);
+    let out = sb.moat(&["init", "--hosts", Host::ClaudeCode.id()]);
     assert_eq!(out.status.code(), Some(OK), "{}", text(&out));
-    assert!(sb.home.join(".claude/settings.json").is_file());
+    assert!(hook_file(&sb, Host::ClaudeCode).is_file());
     assert!(
-        fs::read_dir(sb.home.join(".codex"))
+        fs::read_dir(sb.home.join(dir_of(Host::Codex)))
             .unwrap()
             .next()
             .is_none()
@@ -225,9 +227,13 @@ fn init_hosts_leaves_other_agents_untouched() {
 
 #[test]
 fn uninstall_restores_the_original_files_byte_for_byte() {
-    let sb = Sandbox::bare(&[".claude", ".codex", ".cursor"]);
-    let settings = sb.home.join(".claude/settings.json");
-    let codex_config = sb.home.join(".codex/config.toml");
+    let sb = Sandbox::bare(&[
+        &dir_of(Host::ClaudeCode),
+        &dir_of(Host::Codex),
+        &dir_of(Host::Cursor),
+    ]);
+    let settings = hook_file(&sb, Host::ClaudeCode);
+    let codex_config = mcp_user_file(&sb, Host::Codex);
     let claude_original = "{ \"theme\" : \"dark\",\n  \"hooks\": {\"Stop\": []} }\n";
     let codex_original = "# mine\nmodel = \"o3\"\n";
     fs::write(&settings, claude_original).unwrap();
@@ -240,7 +246,7 @@ fn uninstall_restores_the_original_files_byte_for_byte() {
         "{}",
         text(&out)
     );
-    assert!(pinned(&sb).contains("settings.json"));
+    assert!(pinned(&sb).contains(hook_file_name(Host::ClaudeCode)));
 
     let refused = sb.moat(&["uninstall"]);
     assert_eq!(refused.status.code(), Some(USAGE), "{}", text(&refused));
@@ -251,18 +257,16 @@ fn uninstall_restores_the_original_files_byte_for_byte() {
     assert!(stdout(&out).contains("restored from"), "{}", text(&out));
     assert_eq!(fs::read_to_string(&settings).unwrap(), claude_original);
     assert_eq!(fs::read_to_string(&codex_config).unwrap(), codex_original);
-    assert!(
-        !sb.home.join(".codex/hooks.json").exists(),
-        "init created it"
-    );
-    assert!(
-        !sb.home.join(".cursor/hooks.json").exists(),
-        "init created it"
-    );
+    assert!(!hook_file(&sb, Host::Codex).exists(), "init created it");
+    assert!(!hook_file(&sb, Host::Cursor).exists(), "init created it");
     for dir in [".claude", ".codex", ".cursor"] {
         assert!(backups_in(&sb.home.join(dir)).is_empty(), "{dir}");
     }
-    assert!(!pinned(&sb).contains("settings.json"), "{}", pinned(&sb));
+    assert!(
+        !pinned(&sb).contains(hook_file_name(Host::ClaudeCode)),
+        "{}",
+        pinned(&sb)
+    );
     assert!(!pinned(&sb).contains("config.toml"), "{}", pinned(&sb));
     assert!(sb.home.join(".moat/policy.yaml").is_file(), "state is kept");
 
@@ -272,8 +276,8 @@ fn uninstall_restores_the_original_files_byte_for_byte() {
 
 #[test]
 fn uninstall_keeps_changes_made_since_init() {
-    let sb = Sandbox::bare(&[".claude"]);
-    let settings = sb.home.join(".claude/settings.json");
+    let sb = Sandbox::bare(&[&dir_of(Host::ClaudeCode)]);
+    let settings = hook_file(&sb, Host::ClaudeCode);
     fs::write(&settings, "{\"theme\": \"dark\"}").unwrap();
     assert_eq!(sb.moat(&["init", "--yes"]).status.code(), Some(OK));
     let mut doc: serde_json::Value =
@@ -281,7 +285,7 @@ fn uninstall_keeps_changes_made_since_init() {
     doc["model"] = "opus".into();
     fs::write(&settings, doc.to_string()).unwrap();
 
-    let out = sb.moat_as_person(&["uninstall", "--hosts", "claude-code"]);
+    let out = sb.moat_as_person(&["uninstall", "--hosts", Host::ClaudeCode.id()]);
     assert_eq!(out.status.code(), Some(OK), "{}", text(&out));
     assert!(stdout(&out).contains("backup kept"), "{}", text(&out));
     let left: serde_json::Value =
@@ -293,12 +297,18 @@ fn uninstall_keeps_changes_made_since_init() {
 /// neither replaces nor lists it, and `uninstall` neither restores nor deletes it.
 #[test]
 fn a_users_file_at_a_backup_name_is_never_taken_or_deleted() {
-    let sb = Sandbox::bare(&[".claude"]);
-    let settings = sb.home.join(".claude/settings.json");
+    let sb = Sandbox::bare(&[&dir_of(Host::ClaudeCode)]);
+    let settings = hook_file(&sb, Host::ClaudeCode);
     let mine = sb.home.join(".claude/settings.json.moat-backup");
     fs::write(&settings, "{\"theme\": \"dark\"}\n").unwrap();
     fs::write(&mine, "my own notes\n").unwrap();
-    let out = sb.moat(&["init", "--yes", "--hosts", "claude-code", "--verbose"]);
+    let out = sb.moat(&[
+        "init",
+        "--yes",
+        "--hosts",
+        Host::ClaudeCode.id(),
+        "--verbose",
+    ]);
     assert_eq!(out.status.code(), Some(OK), "{}", text(&out));
     assert!(
         !stdout(&out).contains("settings.json.moat-backup"),
@@ -306,7 +316,7 @@ fn a_users_file_at_a_backup_name_is_never_taken_or_deleted() {
         text(&out)
     );
 
-    let out = sb.moat_as_person(&["uninstall", "--hosts", "claude-code"]);
+    let out = sb.moat_as_person(&["uninstall", "--hosts", Host::ClaudeCode.id()]);
     assert_eq!(out.status.code(), Some(OK), "{}", text(&out));
     assert_eq!(fs::read_to_string(&mine).unwrap(), "my own notes\n");
     let left: serde_json::Value =
@@ -321,29 +331,29 @@ fn a_users_file_at_a_backup_name_is_never_taken_or_deleted() {
 
 #[test]
 fn uninstall_purge_deletes_the_state_directory() {
-    let sb = Sandbox::bare(&[".claude"]);
+    let sb = Sandbox::bare(&[&dir_of(Host::ClaudeCode)]);
     assert_eq!(sb.moat(&["init", "--yes"]).status.code(), Some(OK));
     let out = sb.moat_as_person(&["uninstall", "--purge"]);
     assert_eq!(out.status.code(), Some(OK), "{}", text(&out));
     assert!(!sb.home.join(".moat").exists());
-    assert!(!sb.home.join(".claude/settings.json").exists());
+    assert!(!hook_file(&sb, Host::ClaudeCode).exists());
 }
 
 /// #298: `init` records a moved config directory; later commands use it without
 /// the variable, and uninstall forgets it.
 #[test]
 fn commands_follow_the_recorded_config_dir() {
-    let sb = Sandbox::bare(&[".claude"]);
+    let sb = Sandbox::bare(&[&dir_of(Host::ClaudeCode)]);
     let custom = sb.home.join("custom-claude");
     fs::create_dir_all(&custom).unwrap();
     let out = output(
         sb.command()
-            .args(["init", "--hosts", "claude-code"])
+            .args(["init", "--hosts", Host::ClaudeCode.id()])
             .env("CLAUDE_CONFIG_DIR", &custom),
         None,
     );
     assert_eq!(out.status.code(), Some(OK), "{}", text(&out));
-    assert!(custom.join("settings.json").is_file());
+    assert!(custom.join(hook_file_name(Host::ClaudeCode)).is_file());
     let recorded = fs::read_to_string(sb.home.join(".moat/hosts.json")).unwrap();
     assert!(recorded.contains("custom-claude"), "{recorded}");
 
@@ -355,11 +365,15 @@ fn commands_follow_the_recorded_config_dir() {
         "{}",
         text(&doctor)
     );
-    assert!(!sb.home.join(".claude/settings.json").exists());
+    assert!(!hook_file(&sb, Host::ClaudeCode).exists());
 
     let out = sb.moat_as_person(&["uninstall"]);
     assert_eq!(out.status.code(), Some(OK), "{}", text(&out));
-    assert!(!custom.join("settings.json").exists(), "{}", text(&out));
+    assert!(
+        !custom.join(hook_file_name(Host::ClaudeCode)).exists(),
+        "{}",
+        text(&out)
+    );
     let recorded = fs::read_to_string(sb.home.join(".moat/hosts.json")).unwrap();
     assert!(!recorded.contains("custom-claude"), "{recorded}");
     let doctor = sb.moat(&["doctor"]);
@@ -376,13 +390,13 @@ fn kernel_self_covers_the_recorded_and_the_env_config_dir() {
     fs::create_dir_all(&recorded).unwrap();
     let out = output(
         sb.command()
-            .args(["init", "--hosts", "claude-code"])
+            .args(["init", "--hosts", Host::ClaudeCode.id()])
             .env("CLAUDE_CONFIG_DIR", &recorded),
         None,
     );
     assert_eq!(out.status.code(), Some(OK), "{}", text(&out));
     for dir in [&recorded, &other] {
-        let target = dir.join("settings.json");
+        let target = dir.join(hook_file_name(Host::ClaudeCode));
         let out = output(
             sb.command().env("CLAUDE_CONFIG_DIR", &other).args([
                 "policy",
@@ -403,8 +417,8 @@ fn kernel_self_covers_the_recorded_and_the_env_config_dir() {
 /// spelled like one of them stays.
 #[test]
 fn uninstall_takes_only_the_deny_rules_init_added() {
-    let sb = Sandbox::bare(&[".claude"]);
-    let settings = sb.home.join(".claude/settings.json");
+    let sb = Sandbox::bare(&[&dir_of(Host::ClaudeCode)]);
+    let settings = hook_file(&sb, Host::ClaudeCode);
     let user = serde_json::json!(["Read(//**/.env)", "Edit(//tmp/x)"]);
     let original = serde_json::json!({ "permissions": { "deny": user } });
     fs::write(&settings, original.to_string()).unwrap();
@@ -425,7 +439,7 @@ fn uninstall_takes_only_the_deny_rules_init_added() {
     // A change since init keeps the file from being restored: the rules are stripped.
     doc["model"] = "opus".into();
     fs::write(&settings, doc.to_string()).unwrap();
-    let out = sb.moat_as_person(&["uninstall", "--hosts", "claude-code"]);
+    let out = sb.moat_as_person(&["uninstall", "--hosts", Host::ClaudeCode.id()]);
     assert_eq!(out.status.code(), Some(OK), "{}", text(&out));
     let left: serde_json::Value =
         serde_json::from_str(&fs::read_to_string(&settings).unwrap()).unwrap();

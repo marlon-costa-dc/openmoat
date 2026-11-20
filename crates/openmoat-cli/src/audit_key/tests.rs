@@ -3,6 +3,8 @@ use openmoat_core::{Decision, Verdict};
 
 use super::*;
 
+mod upgrade_path;
+
 fn home() -> (tempfile::TempDir, Home) {
     let dir = tempfile::tempdir().unwrap();
     // Not `.moat`: a sandbox the tests may run in refuses writes to one.
@@ -87,6 +89,27 @@ fn the_first_writer_after_an_upgrade_makes_a_key_starting_at_the_newest_event() 
     let chain = home.open_audit().unwrap().verify_chain().unwrap();
     assert_eq!(chain.broken, None);
     assert_eq!((chain.events, chain.keyed), (3, 1));
+}
+
+/// The state a writable open beside this module left (the guard's taint cache
+/// before the fix): upgraded to keyed events, no key, no keyed event. Writers
+/// refuse and name `openmoat init`, which makes the key and keeps the log.
+#[test]
+fn an_upgrade_that_made_no_key_is_mended_by_init_keeping_the_log() {
+    let (_dir, home) = home();
+    logged(&home, 2);
+    std::fs::remove_file(path(&home)).unwrap();
+    openmoat_audit::testing::as_before_version_12(&home.audit_path()).unwrap();
+    drop(Store::open_existing(&home.audit_path()).unwrap());
+    let refused = format!("{:#}", open_existing(&home).err().unwrap());
+    assert!(refused.contains("No event in it is keyed yet"), "{refused}");
+    assert!(!path(&home).exists());
+    assert_eq!(open(&home).unwrap(), None);
+    let store = open_existing(&home).unwrap();
+    assert_eq!(read(&home).unwrap().unwrap().after(), EventId(2));
+    record(&store).unwrap();
+    let chain = home.open_audit().unwrap().verify_chain().unwrap();
+    assert_eq!((chain.events, chain.keyed, chain.broken), (3, 1, None));
 }
 
 #[test]

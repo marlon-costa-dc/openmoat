@@ -14,7 +14,7 @@ use openmoat_hosts::Host;
 
 use crate::common::{Sandbox, USAGE, deny_exit, fixture, json, stderr, text};
 use crate::hosts::rows::{Row, rows};
-use crate::hosts::{assert_reason, dir_of, guard, verdict};
+use crate::hosts::{assert_reason, dir_of, guard, hook_file, verdict};
 
 /// `moat guard` for `row`'s hook, its input not yet written.
 fn command(row: &Row, sb: &Sandbox) -> Command {
@@ -46,7 +46,11 @@ fn assert_denied(row: &Row, out: &Output, what: &str) {
 // protection: payloads every every
 #[test]
 fn payloads_guard_cannot_read_are_denied_in_each_hosts_format() {
-    let sb = Sandbox::installed(&[".claude", ".codex", ".cursor"]);
+    let sb = Sandbox::installed(&[
+        &dir_of(Host::ClaudeCode),
+        &dir_of(Host::Codex),
+        &dir_of(Host::Cursor),
+    ]);
     for row in rows() {
         let governed = fixture(row.governed);
         let truncated = &governed[..governed.len() / 2];
@@ -73,7 +77,11 @@ fn payloads_guard_cannot_read_are_denied_in_each_hosts_format() {
 /// even where the host runs a call OpenMoat makes no decision on (pi).
 #[test]
 fn an_unknown_tool_naming_a_secret_is_denied_where_openmoat_sees_it() {
-    let sb = Sandbox::installed(&[".claude", ".codex", ".cursor"]);
+    let sb = Sandbox::installed(&[
+        &dir_of(Host::ClaudeCode),
+        &dir_of(Host::Codex),
+        &dir_of(Host::Cursor),
+    ]);
     for row in rows() {
         let out = guard(&row, &sb, &(row.unknown_tool)().to_string());
         if row.checks_unknown_tools {
@@ -112,7 +120,11 @@ fn an_unknown_tool_naming_a_secret_is_denied_where_openmoat_sees_it() {
 /// its own first: here its payload never ends, and it answers within its budget.
 #[test]
 fn a_guard_that_cannot_decide_in_time_denies_before_the_host_times_out() {
-    let sb = Sandbox::installed(&[".claude", ".codex", ".cursor"]);
+    let sb = Sandbox::installed(&[
+        &dir_of(Host::ClaudeCode),
+        &dir_of(Host::Codex),
+        &dir_of(Host::Cursor),
+    ]);
     let budget = Duration::from_secs(30);
     let started = Instant::now();
     let running: Vec<_> = rows()
@@ -182,7 +194,11 @@ fn a_guard_that_cannot_decide_in_time_denies_before_the_host_times_out() {
 /// it): every host but Cursor would run the call, so `status` and `doctor` say so.
 #[test]
 fn a_hook_whose_binary_is_gone_is_not_protected() {
-    let sb = Sandbox::installed(&[".claude", ".codex", ".cursor"]);
+    let sb = Sandbox::installed(&[
+        &dir_of(Host::ClaudeCode),
+        &dir_of(Host::Codex),
+        &dir_of(Host::Cursor),
+    ]);
     let escaped = |path: &str| {
         serde_json::to_string(path)
             .unwrap()
@@ -327,8 +343,8 @@ fn doctor_names_an_agent_that_runs_the_call_when_the_hook_fails() {
 /// until `moat init` rewrites the matcher in place and re-pins the hook file.
 #[test]
 fn moat_init_adds_a_new_tool_to_an_installed_matcher() {
-    let sb = Sandbox::installed(&[".claude"]);
-    let path = sb.home.join(".claude/settings.json");
+    let sb = Sandbox::installed(&[&dir_of(Host::ClaudeCode)]);
+    let path = hook_file(&sb, Host::ClaudeCode);
     let old = fs::read_to_string(&path).unwrap().replace("|WebSearch", "");
     fs::write(&path, old).unwrap();
     let status = json(&sb.moat(&["status", "--format", "json"]));
@@ -344,7 +360,7 @@ fn moat_init_adds_a_new_tool_to_an_installed_matcher() {
         .as_str()
         .unwrap();
     assert!(matcher.split('|').any(|m| m == "WebSearch"), "{matcher}");
-    let out = sb.guard("claude-code", &fixture("claude-code/websearch.json"));
+    let out = sb.guard_fixture(Host::ClaudeCode, "websearch.json");
     assert_eq!(
         out.status.code(),
         Some(0),

@@ -9,16 +9,18 @@ use std::process::Output;
 use serde_json::{Value, json};
 
 use crate::common::{DENY, OK, Sandbox, output, stdout, text};
+use crate::hosts::{dir_of, mcp_user_file};
+use openmoat_hosts::Host;
 
 const SERVERS: &str = r#"{"mcpServers": {"gh": {"command": "npx", "args": ["-y", "gh-server"]}}}"#;
 
 fn bare() -> Sandbox {
-    Sandbox::bare(&[".claude"])
+    Sandbox::bare(&[&dir_of(Host::ClaudeCode)])
 }
 
 /// The agent's user MCP file with [`SERVERS`] in it.
 fn add_servers(sb: &Sandbox) {
-    std::fs::write(sb.home.join(".claude.json"), SERVERS).unwrap();
+    std::fs::write(mcp_user_file(sb, Host::ClaudeCode), SERVERS).unwrap();
 }
 
 fn bare_with_servers() -> Sandbox {
@@ -31,16 +33,17 @@ fn bare_with_servers() -> Sandbox {
 fn init_answering(sb: &Sandbox, answers: &str) -> Output {
     output(
         sb.command()
-            .args(["init", "--hosts", "claude-code"])
+            .args(["init", "--hosts", Host::ClaudeCode.id()])
             .env("MOAT_ASSUME_TTY", "1"),
         Some(answers),
     )
 }
 
 fn args_of_gh(sb: &Sandbox) -> Value {
-    let file: Value =
-        serde_json::from_str(&std::fs::read_to_string(sb.home.join(".claude.json")).unwrap())
-            .unwrap();
+    let file: Value = serde_json::from_str(
+        &std::fs::read_to_string(mcp_user_file(sb, Host::ClaudeCode)).unwrap(),
+    )
+    .unwrap();
     file["mcpServers"]["gh"]["args"].clone()
 }
 
@@ -67,7 +70,10 @@ fn a_person_is_asked_and_a_yes_wraps_and_a_guard_still_works() {
         said.contains("Run them through OpenMoat? [Y/n/d]"),
         "{said}"
     );
-    assert!(said.contains("`gh` (Claude Code"), "{said}");
+    assert!(
+        said.contains(&format!("`gh` ({}", Host::ClaudeCode.display_name())),
+        "{said}"
+    );
     assert!(wrapped(&sb), "{said}");
     assert!(
         sb.home.join(".claude.json.moat-mcp-backup").exists(),
@@ -75,7 +81,7 @@ fn a_person_is_asked_and_a_yes_wraps_and_a_guard_still_works() {
     );
     // The change was re-pinned as a person's: no drift, and the rule set holds.
     let payload = mcp_payload("gh", &sb.home);
-    let guard = sb.guard("claude-code", &payload);
+    let guard = sb.guard(Host::ClaudeCode.id(), &payload);
     assert_eq!(guard.status.code(), Some(OK), "{}", text(&guard));
     // Undo.
     let undone = sb.moat_as_person(&["mcp", "unwrap", "gh"]);
@@ -92,7 +98,7 @@ fn a_no_is_kept_and_not_asked_again_and_the_server_stays_reported() {
     assert!(text(&out).contains("left as they are"), "{}", text(&out));
     // The record did not leave the lock behind.
     let payload = mcp_payload("gh", &sb.home);
-    let guard = sb.guard("claude-code", &payload);
+    let guard = sb.guard(Host::ClaudeCode.id(), &payload);
     assert_eq!(guard.status.code(), Some(OK), "{}", text(&guard));
 
     let again = init_answering(&sb, "");
@@ -109,7 +115,7 @@ fn a_no_is_kept_and_not_asked_again_and_the_server_stays_reported() {
 #[test]
 fn the_diff_is_shown_on_request_and_nothing_changes_before_the_answer() {
     let sb = bare_with_servers();
-    let before = std::fs::read_to_string(sb.home.join(".claude.json")).unwrap();
+    let before = std::fs::read_to_string(mcp_user_file(&sb, Host::ClaudeCode)).unwrap();
     let out = init_answering(&sb, "d\nn\n");
     assert_eq!(out.status.code(), Some(OK), "{}", text(&out));
     assert!(
@@ -119,7 +125,7 @@ fn the_diff_is_shown_on_request_and_nothing_changes_before_the_answer() {
     );
     assert!(text(&out).contains("mcp"), "{}", text(&out));
     assert_eq!(
-        std::fs::read_to_string(sb.home.join(".claude.json")).unwrap(),
+        std::fs::read_to_string(mcp_user_file(&sb, Host::ClaudeCode)).unwrap(),
         before,
         "the diff changed the file"
     );
@@ -140,7 +146,7 @@ fn nobody_at_a_terminal_and_the_opt_out_rewrite_nothing() {
 
     // A person who opts out is not asked.
     let sb = bare_with_servers();
-    let out = sb.moat_as_person(&["init", "--hosts", "claude-code", "--no-mcp-proxy"]);
+    let out = sb.moat_as_person(&["init", "--hosts", Host::ClaudeCode.id(), "--no-mcp-proxy"]);
     assert_eq!(out.status.code(), Some(OK), "{}", text(&out));
     assert!(!wrapped(&sb), "{}", text(&out));
     assert!(!text(&out).contains("Run them through"), "{}", text(&out));
@@ -156,7 +162,7 @@ fn a_yaml_definition_is_named_and_left() {
     std::fs::write(&path, original).unwrap();
     let out = output(
         sb.command()
-            .args(["init", "--hosts", "hermes"])
+            .args(["init", "--hosts", Host::Hermes.id()])
             .env("MOAT_ASSUME_TTY", "1"),
         Some("y\n"),
     );
@@ -198,7 +204,12 @@ fn status_in(sb: &Sandbox, project: &Path) -> Value {
 /// reporting it runs nothing.
 #[test]
 fn a_planted_project_definition_is_reported_and_held_and_never_run_by_openmoat() {
-    for id in ["claude-code", "cursor", "copilot-cli", "gemini-cli"] {
+    for id in [
+        Host::ClaudeCode.id(),
+        Host::Cursor.id(),
+        Host::CopilotCli.id(),
+        Host::GeminiCli.id(),
+    ] {
         let host: openmoat_hosts::Host = id.parse().unwrap();
         let sb = Sandbox::bare(&[&crate::hosts::dir_of(host)]);
         let out = sb.moat(&["init", "--yes", "--hosts", id]);
@@ -225,13 +236,13 @@ fn a_planted_project_definition_is_reported_and_held_and_never_run_by_openmoat()
 
 #[test]
 fn a_planted_definitions_tool_call_is_denied_and_an_accepted_one_passes() {
-    let sb = Sandbox::bare(&[".claude"]);
+    let sb = Sandbox::bare(&[&dir_of(Host::ClaudeCode)]);
     let out = sb.moat(&["init", "--yes"]);
     assert_eq!(out.status.code(), Some(OK), "{}", text(&out));
     let project = sb.project();
     plant(&project, ".mcp.json");
 
-    let denied = sb.guard("claude-code", &mcp_payload("planted", &project));
+    let denied = sb.guard(Host::ClaudeCode.id(), &mcp_payload("planted", &project));
     assert_eq!(denied.status.code(), Some(DENY), "{}", text(&denied));
     assert!(
         text(&denied).contains("mcp-server-changed"),
@@ -249,7 +260,7 @@ fn a_planted_definitions_tool_call_is_denied_and_an_accepted_one_passes() {
         Some("y\n"),
     );
     assert_eq!(accepted.status.code(), Some(OK), "{}", text(&accepted));
-    let passed = sb.guard("claude-code", &mcp_payload("planted", &project));
+    let passed = sb.guard(Host::ClaudeCode.id(), &mcp_payload("planted", &project));
     assert_eq!(passed.status.code(), Some(OK), "{}", text(&passed));
     assert!(
         !text(&passed).contains("mcp-server-changed"),

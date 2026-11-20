@@ -7,6 +7,8 @@ use std::path::Path;
 use serde_json::{Value, json};
 
 use crate::common::{DENY, OK, Sandbox, USAGE, output, stdout, text};
+use crate::hosts::{dir_of, mcp_user_file};
+use openmoat_hosts::Host;
 
 const SERVERS: &str = r#"{"numStartups": 3, "mcpServers": {
     "gh": {"command": "npx", "args": ["-y", "@modelcontextprotocol/server-github"]},
@@ -14,8 +16,8 @@ const SERVERS: &str = r#"{"numStartups": 3, "mcpServers": {
 
 /// A home with Claude Code and `~/.claude.json` defining `servers`, then `moat init`.
 fn installed_with(servers: &str) -> Sandbox {
-    let sb = Sandbox::bare(&[".claude"]);
-    std::fs::write(sb.home.join(".claude.json"), servers).unwrap();
+    let sb = Sandbox::bare(&[&dir_of(Host::ClaudeCode)]);
+    std::fs::write(mcp_user_file(&sb, Host::ClaudeCode), servers).unwrap();
     let out = sb.moat(&["init", "--yes", "--verbose"]);
     assert_eq!(out.status.code(), Some(OK), "{}", text(&out));
     assert!(
@@ -31,11 +33,11 @@ fn mcp_call(sb: &Sandbox, cwd: &Path, tool: &str) -> std::process::Output {
         "session_id": "s1", "cwd": cwd.to_string_lossy(), "hook_event_name": "PreToolUse",
         "tool_name": tool, "tool_input": {}, "tool_use_id": "t1"
     });
-    sb.guard("claude-code", &payload.to_string())
+    sb.guard(Host::ClaudeCode.id(), &payload.to_string())
 }
 
 fn edit_claude_json(sb: &Sandbox, from: &str, to: &str) {
-    let path = sb.home.join(".claude.json");
+    let path = mcp_user_file(sb, Host::ClaudeCode);
     let now = std::fs::read_to_string(&path).unwrap();
     assert!(now.contains(from), "{now}");
     std::fs::write(&path, now.replacen(from, to, 1)).unwrap();
@@ -46,8 +48,8 @@ fn edit_claude_json(sb: &Sandbox, from: &str, to: &str) {
 /// a change to one is denied, whether or not `moat` sees the variable.
 #[test]
 fn servers_inside_the_claude_config_dir_are_pinned() {
-    let sb = Sandbox::bare(&[".claude"]);
-    let config = sb.home.join(".claude");
+    let sb = Sandbox::bare(&[&dir_of(Host::ClaudeCode)]);
+    let config = sb.home.join(dir_of(Host::ClaudeCode));
     let inside = config.join(".claude.json");
     std::fs::write(&inside, SERVERS).unwrap();
     let out = output(
@@ -232,9 +234,10 @@ fn wrap_points_a_server_at_the_proxy_and_uninstall_restores_it() {
         "{}",
         text(&out)
     );
-    let file: Value =
-        serde_json::from_str(&std::fs::read_to_string(sb.home.join(".claude.json")).unwrap())
-            .unwrap();
+    let file: Value = serde_json::from_str(
+        &std::fs::read_to_string(mcp_user_file(&sb, Host::ClaudeCode)).unwrap(),
+    )
+    .unwrap();
     let gh = &file["mcpServers"]["gh"];
     assert_eq!(
         gh["args"],
@@ -244,7 +247,7 @@ fn wrap_points_a_server_at_the_proxy_and_uninstall_restores_it() {
             "--server",
             "gh",
             "--host",
-            "claude-code",
+            Host::ClaudeCode.id(),
             "--",
             "npx",
             "-y",
@@ -266,9 +269,10 @@ fn wrap_points_a_server_at_the_proxy_and_uninstall_restores_it() {
 
     let out = sb.moat_as_person(&["uninstall"]);
     assert!(text(&out).contains("unwrapped `gh`"), "{}", text(&out));
-    let file: Value =
-        serde_json::from_str(&std::fs::read_to_string(sb.home.join(".claude.json")).unwrap())
-            .unwrap();
+    let file: Value = serde_json::from_str(
+        &std::fs::read_to_string(mcp_user_file(&sb, Host::ClaudeCode)).unwrap(),
+    )
+    .unwrap();
     assert_eq!(
         file["mcpServers"]["gh"],
         json!({"command": "npx", "args": ["-y", "@modelcontextprotocol/server-github"]})
@@ -285,7 +289,7 @@ fn wrap_rewrites_an_opencode_command_list_and_uninstall_restores_it() {
         "environment": {"A": "1"}});
     let config = json!({"mcp": {"db": original}, "theme": "x"}).to_string();
     std::fs::write(&file, config).unwrap();
-    let out = sb.moat(&["init", "--yes", "--hosts", "opencode"]);
+    let out = sb.moat(&["init", "--yes", "--hosts", Host::OpenCode.id()]);
     assert_eq!(out.status.code(), Some(OK), "{}", text(&out));
     let out = sb.moat_as_person(&["mcp", "wrap", "--no-sandbox", "db"]);
     assert_eq!(out.status.code(), Some(OK), "{}", text(&out));
@@ -311,7 +315,7 @@ fn wrap_names_a_goose_extension_and_leaves_its_yaml_file() {
     let config = "extensions:\n  gh:\n    enabled: true\n    type: stdio\n    name: gh\n    \
                   cmd: npx\n    args: [\"-y\", \"pkg\"]\n";
     std::fs::write(&file, config).unwrap();
-    let out = sb.moat(&["init", "--yes", "--hosts", "goose"]);
+    let out = sb.moat(&["init", "--yes", "--hosts", Host::Goose.id()]);
     assert_eq!(out.status.code(), Some(OK), "{}", text(&out));
     let status = sb.moat(&["status"]);
     assert!(text(&status).contains("`gh`"), "{}", text(&status));
@@ -333,7 +337,7 @@ fn doctor_accept_over_drift_removes_a_clear_value_and_succeeds() {
     let config = json!({"mcp": {"db": {"type": "local", "command": ["db-server"],
         "environment": {"API_KEY": "kept-secret-value"}}}});
     std::fs::write(&file, config.to_string()).unwrap();
-    let out = sb.moat(&["init", "--yes", "--hosts", "opencode"]);
+    let out = sb.moat(&["init", "--yes", "--hosts", Host::OpenCode.id()]);
     assert_eq!(out.status.code(), Some(OK), "{}", text(&out));
     let lock_path = sb.home.join(".moat/policy.lock");
     let mut lock: Value =

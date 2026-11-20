@@ -18,7 +18,9 @@ use serde_json::{Value, json};
 use sha2::{Digest as _, Sha256};
 
 use crate::common::{DENY, OK, Sandbox, json as json_of, stderr, stdout, text};
+use crate::hosts::{dir_of, hook_file};
 use crate::taint::call;
+use openmoat_hosts::Host;
 
 /// A session id as Claude Code makes them.
 const SESSION_A: &str = "5f0c2d1e-0a4b-4c3d-9e8f-7a6b5c4d3e2f";
@@ -27,7 +29,7 @@ const SESSION_B: &str = "9a8b7c6d-5e4f-4a3b-8c2d-1e0f9a8b7c6d";
 /// An installed home with Claude Code, its sandbox sending traffic to
 /// `openmoat proxy` on a free port, and a project.
 fn setup() -> (Sandbox, u16, PathBuf) {
-    let sb = Sandbox::installed(&[".claude"]);
+    let sb = Sandbox::installed(&[&dir_of(Host::ClaudeCode)]);
     let port = sb.use_free_proxy_port();
     let project = sb.project();
     (sb, port, project)
@@ -46,7 +48,7 @@ fn session_start(session: &str, cwd: &Path) -> String {
 /// `CLAUDE_ENV_FILE`.
 fn start(sb: &Sandbox, session: &str, cwd: &Path, env_file: Option<&Path>) -> std::process::Output {
     let mut cmd = sb.command();
-    cmd.args(["guard", "--host", "claude-code"]);
+    cmd.args(["guard", "--host", Host::ClaudeCode.id()]);
     if let Some(file) = env_file {
         cmd.env("CLAUDE_ENV_FILE", file);
     }
@@ -69,7 +71,7 @@ fn issued_url(sb: &Sandbox, session: &str, cwd: &Path) -> String {
         "https_proxy",
     ] {
         assert!(
-            lines.contains(&format!("export {variable}=http://v1.claude-code.")),
+            lines.contains(&format!("export {variable}=http://v2.claude-code.")),
             "{lines}"
         );
     }
@@ -345,7 +347,10 @@ fn a_session_that_read_a_secret_cannot_send_through_the_proxy() {
     let (user_a, password_a) = userinfo(&issued_url(&sb, SESSION_A, &project));
     let (user_b, password_b) = userinfo(&issued_url(&sb, SESSION_B, &project));
     let read = json!({"file_path": project.join("creds/token").to_string_lossy()});
-    let out = sb.guard("claude-code", &call(SESSION_A, &project, "Read", &read));
+    let out = sb.guard(
+        Host::ClaudeCode.id(),
+        &call(SESSION_A, &project, "Read", &read),
+    );
     assert!(stdout(&out).contains("\"ask\""), "{}", text(&out));
 
     let _proxy = sb.start_proxy();
@@ -390,7 +395,7 @@ fn a_session_start_without_an_env_file_says_so_and_without_a_port_does_nothing()
     assert_eq!(stdout(&out), "");
     assert!(stderr(&out).contains("CLAUDE_ENV_FILE"), "{}", text(&out));
 
-    let sb = Sandbox::installed(&[".claude"]);
+    let sb = Sandbox::installed(&[&dir_of(Host::ClaudeCode)]);
     let project = sb.project();
     let env_file = sb.home.join("env.sh");
     let out = start(&sb, SESSION_A, &project, Some(&env_file));
@@ -400,15 +405,103 @@ fn a_session_start_without_an_env_file_says_so_and_without_a_port_does_nothing()
     assert!(!sb.home.join(".moat/proxy.key").exists());
 }
 
+/// The default policy's gist rules held by the proxy too (`hook_only` off),
+/// and a CA that covers them, made by a person (ADR-062).
+fn proxy_held_rules_and_ca(sb: &Sandbox) {
+    // Edited as YAML, not as text: a Windows checkout has CRLF line endings.
+    let path = sb.home.join(".moat/policy.yaml");
+    let mut policy: Value =
+        openmoat_core::yaml::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
+    policy["requests"][0]["hook_only"] = false.into();
+    std::fs::write(&path, openmoat_core::yaml::to_string(&policy).unwrap()).unwrap();
+    let accepted = sb.moat_as_person(&["doctor", "--accept"]);
+    assert!(text(&accepted).contains("re-pinned"), "{}", text(&accepted));
+    let mut cmd = sb.command();
+    cmd.args(["proxy", "ca", "init"])
+        .env("MOAT_ASSUME_TTY", "1");
+    let out = crate::common::output(&mut cmd, Some("y\n"));
+    assert_eq!(out.status.code(), Some(OK), "{}", text(&out));
+}
+
+/// Claude Code's `SessionStart` gives the session the proxy CA's trust files
+/// (ADR-062 §2) only when the policy has request rules the proxy holds and a
+/// pinned CA exists: the certificate, never the key, and a credential whose
+/// trust mark says so. A folder planted as a symbolic link gets no files.
+#[test]
+fn a_session_start_gives_the_session_the_ca_only_when_a_ca_covers_its_request_rules() {
+    const SESSION_C: &str = "3c2b1a09-8f7e-4d6c-9b5a-4f3e2d1c0b9a";
+    let (sb, _port, project) = setup();
+    let tmp = sb.home.join("tmp");
+    std::fs::create_dir_all(&tmp).unwrap();
+    let start_in = |session: &str| {
+        let env_file = sb.home.join(format!("env-{session}.sh"));
+        let mut cmd = sb.command();
+        cmd.args(["guard", "--host", Host::ClaudeCode.id()])
+            .env("CLAUDE_ENV_FILE", &env_file)
+            .env("TMPDIR", &tmp)
+            .env("XDG_RUNTIME_DIR", &tmp);
+        let out = crate::common::output(&mut cmd, Some(&session_start(session, &project)));
+        assert_eq!(out.status.code(), Some(OK), "{}", text(&out));
+        std::fs::read_to_string(&env_file).unwrap()
+    };
+    // The default policy's rules are the hook's: no trust files.
+    let lines = start_in(SESSION_A);
+    assert!(!lines.contains("NODE_EXTRA_CA_CERTS"), "{lines}");
+    assert!(lines.contains(&format!("{SESSION_A}.n:")), "{lines}");
+
+    proxy_held_rules_and_ca(&sb);
+    let lines = start_in(SESSION_B);
+    assert!(lines.contains(&format!("{SESSION_B}.t:")), "{lines}");
+    let ca_file = lines
+        .lines()
+        .find_map(|l| l.strip_prefix("export NODE_EXTRA_CA_CERTS='"))
+        .and_then(|rest| rest.strip_suffix('\''))
+        .unwrap_or_else(|| panic!("{lines}"))
+        .to_owned();
+    assert!(
+        ca_file.contains(&format!("moat-session-{SESSION_B}-ca")),
+        "{ca_file}"
+    );
+    let written = std::fs::read_to_string(&ca_file).unwrap();
+    let pinned = std::fs::read_to_string(sb.home.join(".moat/proxy-ca/ca.pem")).unwrap();
+    assert_eq!(written, pinned);
+    assert!(!written.contains("PRIVATE KEY"));
+
+    #[cfg(unix)]
+    {
+        let elsewhere = sb.home.join("elsewhere");
+        std::fs::create_dir_all(&elsewhere).unwrap();
+        std::os::unix::fs::symlink(&elsewhere, tmp.join(format!("moat-session-{SESSION_C}-ca")))
+            .unwrap();
+        let lines = start_in(SESSION_C);
+        assert!(!lines.contains("NODE_EXTRA_CA_CERTS"), "{lines}");
+        assert!(lines.contains(&format!("{SESSION_C}.n:")), "{lines}");
+        assert_eq!(std::fs::read_dir(&elsewhere).unwrap().count(), 0);
+
+        // A folder planted in advance that others may enter is refused too.
+        let session_d = "7d6c5b4a-3f2e-4d1c-8b0a-9f8e7d6c5b4a";
+        let planted = tmp.join(format!("moat-session-{session_d}-ca"));
+        std::fs::create_dir(&planted).unwrap();
+        std::fs::set_permissions(
+            &planted,
+            <std::fs::Permissions as std::os::unix::fs::PermissionsExt>::from_mode(0o777),
+        )
+        .unwrap();
+        let lines = start_in(session_d);
+        assert!(!lines.contains("NODE_EXTRA_CA_CERTS"), "{lines}");
+        assert!(lines.contains(&format!("{session_d}.n:")), "{lines}");
+        assert_eq!(std::fs::read_dir(&planted).unwrap().count(), 0);
+    }
+}
+
 /// `init` installs the `SessionStart` entry, and `doctor` and `status` say
 /// what each host sandbox's traffic carries.
 #[test]
 fn init_installs_the_entry_and_doctor_and_status_name_each_host() {
-    let sb = Sandbox::installed(&[".claude", ".codex"]);
-    let settings: Value = serde_json::from_str(
-        &std::fs::read_to_string(sb.home.join(".claude/settings.json")).unwrap(),
-    )
-    .unwrap();
+    let sb = Sandbox::installed(&[&dir_of(Host::ClaudeCode), &dir_of(Host::Codex)]);
+    let settings: Value =
+        serde_json::from_str(&std::fs::read_to_string(hook_file(&sb, Host::ClaudeCode)).unwrap())
+            .unwrap();
     let entry = &settings["hooks"]["SessionStart"][0];
     assert_eq!(
         entry["matcher"], "startup|resume|clear|compact",
@@ -416,7 +509,13 @@ fn init_installs_the_entry_and_doctor_and_status_name_each_host() {
     );
     assert_eq!(
         entry["hooks"][0]["args"],
-        json!(["guard", "--host", "claude-code", "--home", sb.home_word()]),
+        json!([
+            "guard",
+            "--host",
+            Host::ClaudeCode.id(),
+            "--home",
+            sb.home_word()
+        ]),
         "{entry}"
     );
     sb.use_free_proxy_port();

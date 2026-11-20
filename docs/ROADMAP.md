@@ -13,7 +13,7 @@ carries dates. Release stages and their exit criteria come from ADR-013.
 
 ## Where it is today
 
-The latest release is `0.22.0`, from GitHub Releases, the Homebrew tap and crates.io
+The latest release is `0.24.0`, from GitHub Releases, the Homebrew tap and crates.io
 ([INSTALL.md](INSTALL.md)).
 
 **Release stage:** 0.x, usable daily, before 1.0. ADR-013's first two stages are
@@ -22,8 +22,10 @@ platform and false positives from daily use turned into fixtures, then enforceme
 (`openmoat run` with Seatbelt and Landlock + seccomp, the egress proxy, session taint,
 the MCP proxy with description pinning) shown by the executing fixtures in
 [EVIDENCE.md](EVIDENCE.md), where exfiltration fails at the OS level. What 1.0 still
-needs, as ADR-013 sets it: a stable policy schema with `openmoat policy migrate` (#136)
-and MoatBench meeting a 1.0 gate; the third, `openmoat serve` (#320), is built (ADR-066). [MOATBENCH.md](MOATBENCH.md)
+needs, as ADR-013 sets it: MoatBench meeting a 1.0 gate. Its other two needs are built:
+a stable policy schema with `openmoat policy migrate` (#136: the versioning rules, the
+version-first errors, the command and a JSON Schema for editors; ADR-103, POLICY.md
+§1.1), and `openmoat serve` (#320, ADR-066). [MOATBENCH.md](MOATBENCH.md)
 defines the gate CI applies today (every bundled scenario decided as expected, with no
 false positive, on every platform); the threshold 1.0 asks beyond that is not yet set.
 What exists:
@@ -38,7 +40,8 @@ What exists:
   Cursor's Tab reads through `beforeTabFileRead` (ADR-060, [IDE.md](IDE.md)).
 - **Policy.** Kinds `shell`, `fs.read`, `fs.write`, `net`, `fetch`, `env.read`, `env.set`,
   `mcp`, `web.search` and `tool.unknown`; verdicts `allow`, `defer` (the default for
-  anything no rule names, ADR-025), `review` and `deny`.
+  anything no rule names, ADR-025), `review` and `deny`. Policy schema version 1 is
+  stable and has a JSON Schema editors can validate against (ADR-103, POLICY.md §1.1).
 - **Shell parsing.** OpenMoat's own POSIX lexer and classifier, executable pins
   (ADR-008) and symlink resolution (ADR-009).
 - **Audit.** A redacted, hash-chained local log with `show`, `replay` and `report`;
@@ -135,7 +138,6 @@ Planned for 1.0 or after, not yet scheduled:
 
 - Windows enforcement: an OS sandbox on Windows (#135).
 - A user service for `openmoat proxy` on Windows (#272).
-- A stable policy schema and `openmoat policy migrate` (#136).
 - The Isolated tier on macOS: `openmoat run --isolate` in an Apple Virtualization guest (#175, ADR-023).
 - HTTPS injection of brokered secrets in the standalone `openmoat proxy`, and keep-alive
   inside a terminated tunnel; `openmoat run` has both injection and the method and path
@@ -158,6 +160,15 @@ agent has an adapter, `openmoat run` can still sandbox it.
 
 Aider and the Zed agent have no pre-execution hook, and Roo Code has shut down; use
 `openmoat run` for those.
+
+Kiro and Junie were checked against their documentation on 2026-11-19 and wait for it
+to say more; nothing ships for them until it does, so no adapter guesses a field.
+Kiro CLI V3 documents neither its built-in tool names nor any tool's input, and two of
+its pages disagree on whether a failed hook blocks the call
+([agents/kiro-cli.md](agents/kiro-cli.md)). Junie's hooks are in Early Access, and its
+`PreToolUse` input does not promise a session or a working directory
+([agents/junie-cli.md](agents/junie-cli.md)). Each draft lists what is missing and the
+safe choices an adapter would make.
 
 ## Not planned
 

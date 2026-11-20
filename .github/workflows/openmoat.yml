@@ -1,0 +1,30 @@
+name: openmoat
+
+# OpenMoat's own merge check (docs/MERGE_CHECK.md) on this repository's pull requests,
+# run from a release, as any repository would run it. A `deny` finding fails the check
+# and blocks the merge; a `review` finding is a warning on the pull request for the
+# reviewer, since this repository changes policy, hook and CI files as ordinary work.
+
+on:
+  pull_request:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.run_id }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  merge-check:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: crocodile-labs/openmoat@1dd88d81246a60ffa318f619375628128d5b7ece # v0.23.0
+        with:
+          version: 0.23.0
+          fail-on: deny

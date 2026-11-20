@@ -10,6 +10,7 @@
 use serde::Deserialize;
 
 use crate::policy::{Policy, PolicyError, Require, RequiredBy, RuleGroup};
+use crate::requests::RequestEntry;
 
 /// Prefix of every rule id a repository policy contributes, so decisions and
 /// the audit log say where a rule came from, and a repository rule can never
@@ -39,16 +40,52 @@ pub struct RepoPolicy {
     /// ([`Policy::required_for`] takes the strictest), trusted or not.
     #[serde(default)]
     pub require: Option<Require>,
+    /// Request rules for allowed hosts (ADR-062): `deny` lists only, which
+    /// narrow, trusted or not. An `allow` list is a parse error: it would let
+    /// a repository decide which requests the person's hosts receive.
+    #[serde(default)]
+    pub requests: Vec<RequestEntry>,
 }
 
 impl RepoPolicy {
     /// Parse and lint a repository policy. Pure: takes the YAML text.
     pub fn parse(yaml: &str) -> Result<Self, PolicyError> {
+        crate::policy::check_version(yaml)?;
         let repo: Self = crate::yaml::from_str(yaml).map_err(PolicyError::Parse)?;
         // Every key it has is a policy key, so the policy lint checks the
         // version, the ids and every pattern the same way.
         Policy::parse(yaml)?;
+        if let Some(entry) = repo.requests.iter().find(|e| !e.allow.is_empty()) {
+            return Err(PolicyError::Rule {
+                rule: format!("{}{}", crate::requests::REQUESTS_RULE_PREFIX, entry.id),
+                problem: "a repository policy or a pack may list `deny` request rules only; \
+                          `allow` lists belong in your own policy"
+                    .to_owned(),
+            });
+        }
         Ok(repo)
+    }
+
+    /// This policy's `requests:` entries under `prefix` ids, added to `policy`:
+    /// deny lists only, so they narrow whether trusted or not. An entry is held
+    /// by the hook alone (`hook_only`) unless the person's own policy has the
+    /// proxy hold that host: otherwise it would make the proxy terminate, and
+    /// without a CA refuse, a host the person's git and package managers use.
+    pub fn add_requests(&self, policy: &mut Policy, prefix: &str) {
+        let held: Vec<String> = policy
+            .requests
+            .iter()
+            .filter(|e| !e.hook_only && !e.id.contains(':'))
+            .map(|e| e.host.clone())
+            .collect();
+        policy
+            .requests
+            .extend(self.requests.iter().map(|entry| RequestEntry {
+                id: format!("{prefix}{}", entry.id),
+                allow: Vec::new(),
+                hook_only: entry.hook_only || !held.contains(&entry.host),
+                ..entry.clone()
+            }));
     }
 
     /// `user` with this policy merged in; its allow rules only when `trusted`.
@@ -72,6 +109,7 @@ impl RepoPolicy {
         if let Some(require) = &self.require {
             merged.add_requirement(RequiredBy::Repository, require);
         }
+        self.add_requests(&mut merged, REPO_RULE_PREFIX);
         merged
     }
 

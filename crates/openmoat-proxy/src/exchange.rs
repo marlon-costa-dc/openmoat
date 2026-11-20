@@ -23,7 +23,7 @@ use std::io::{self, ErrorKind, Read, Write};
 use std::net::{Shutdown, TcpStream};
 use std::time::{Duration, Instant};
 
-use openmoat_core::rule_id::{PROXY_AUDIT, PROXY_REQUEST, PROXY_TLS};
+use openmoat_core::rule_id::{PROXY_AUDIT, PROXY_REQUEST, PROXY_TLS, SESSION_TAINT};
 use openmoat_core::{Decision, Verdict};
 use rustls::{ServerConnection, StreamOwned};
 use zeroize::Zeroizing;
@@ -86,7 +86,17 @@ pub(crate) struct Tunnel<'a> {
     pub(crate) record: Record<'a>,
     /// `false` once the session's taint refuses the host (recorded by it).
     pub(crate) still_allowed: &'a dyn Fn() -> bool,
+    /// `true` once the session's taint leaves the host to reads only
+    /// (ADR-062 §3): `GET`, `HEAD` and `OPTIONS` without a body.
+    pub(crate) reads_only: &'a dyn Fn() -> bool,
 }
+
+/// The methods a tainted session may still send to a `requests:` host.
+const READS: &[&str] = &["GET", "HEAD", "OPTIONS"];
+
+/// The longest request target (path and query) a read of a tainted session
+/// may send: a longer one could carry what the session read.
+const MAX_READ_TARGET: usize = 2048;
 
 /// Why the tunnel ends early. The decision, if any, is still to be recorded.
 enum Stop {
@@ -191,6 +201,35 @@ impl Tunnel<'_> {
             .map_err(|refused| Stop::Refuse(403, refused))?;
         if !(self.still_allowed)() {
             return Err(Stop::Quiet);
+        }
+        if (self.reads_only)() {
+            let bodyless = matches!(
+                inner.framing,
+                crate::body::Framing::None | crate::body::Framing::Length(0)
+            );
+            // A read's target can carry data too: a long one is no read.
+            let target_len = inner
+                .head
+                .split(|b| *b == b' ')
+                .nth(1)
+                .map_or(usize::MAX, <[u8]>::len);
+            // Methods are case-sensitive (RFC 9110 §9.1): `get` is no read.
+            if !bodyless || !READS.contains(&inner.method.as_str()) || target_len > MAX_READ_TARGET
+            {
+                return Err(Stop::Refuse(
+                    403,
+                    Decision::single(
+                        Verdict::Deny,
+                        SESSION_TAINT,
+                        format!(
+                            "{} request to {}: the session read secret material, so only GET, \
+                             HEAD and OPTIONS requests without a body, and with a target of at \
+                             most {MAX_READ_TARGET} bytes, reach the host until it ends (ADR-062)",
+                            inner.method, self.host
+                        ),
+                    ),
+                ));
+            }
         }
         let mut upstream = self.upstream(connect)?;
         let mut row = self.allowed.clone();

@@ -49,6 +49,44 @@ fn terminated_hosts_are_sorted_once_each_and_plain_secrets_left_out() {
     assert_eq!(terminated_hosts(&policy(&[])), Vec::<String>::new());
 }
 
+/// The hosts of `requests:` entries the proxy holds are terminated too
+/// (ADR-062); a `hook_only` entry needs no CA.
+#[test]
+fn request_rule_hosts_are_terminated_unless_hook_only() {
+    let yaml = "version: 1\nrequests:\n  - id: r\n    host: r.test\n    deny: ['POST /x']\n  \
+        - id: h\n    host: h.test\n    hook_only: true\n    deny: ['POST /x']\n";
+    let policy = Policy::parse(yaml).unwrap();
+    assert_eq!(terminated_hosts(&policy), ["r.test"]);
+    assert_eq!(request_hosts(&policy), ["r.test"]);
+    let default = Policy::parse(openmoat_core::DEFAULT_POLICY).unwrap();
+    assert_eq!(terminated_hosts(&default), Vec::<String>::new());
+}
+
+/// The standalone proxy terminates `requests:` hosts only with a pinned CA
+/// that covers them, and says so either way.
+#[test]
+fn the_standalone_proxy_terminates_request_hosts_only_with_a_ca_that_covers_them() {
+    let yaml = "version: 1\nrequests:\n  - id: r\n    host: r.test\n    deny: ['POST /x']\n";
+    let policy = Policy::parse(yaml).unwrap();
+    let (_dir, home) = home_with_ca(&["r.test"], true);
+    let (tls, note) = load_for_requests(&home, &policy);
+    assert!(tls.is_some());
+    assert!(note.unwrap().contains("received the proxy CA"));
+    let (_dir, home) = home_with_ca(&["other.test"], true);
+    let (tls, note) = load_for_requests(&home, &policy);
+    assert!(tls.is_none());
+    assert!(note.unwrap().contains("proxy ca init"));
+    let (_dir, home) = home_with_ca(&["r.test"], false);
+    let (tls, note) = load_for_requests(&home, &policy);
+    assert!(tls.is_none());
+    assert!(note.unwrap().contains("no pinned proxy CA"));
+    assert!(
+        load_for_requests(&home, &Policy::parse("version: 1\n").unwrap())
+            .1
+            .is_none()
+    );
+}
+
 #[test]
 fn the_certificate_file_says_what_it_is_and_still_parses() {
     let hosts = vec!["a.test".to_owned()];
@@ -143,4 +181,45 @@ fn trust_files_hold_the_ca_and_go_with_the_run() {
     }
     drop(trust);
     assert!(!dir.exists(), "removed when the run ends");
+}
+
+/// `doctor` and `status` say when a proxy-held `requests:` host is not
+/// covered by the CA, and when a CA exists without the `exfil-endpoints`
+/// pack; nothing without a CA.
+#[test]
+fn status_names_an_uncovered_request_host_and_a_missing_pack() {
+    let yaml = "version: 1\nrequests:\n  - id: r\n    host: r.test\n    deny: ['POST /x']\n";
+    let policy = Policy::parse(yaml).unwrap();
+    let (_dir, home) = home_with_ca(&["r.test"], false);
+    assert_eq!(status_lines(&home, &policy), Vec::new());
+
+    let (_dir, home) = home_with_ca(&["other.test"], true);
+    let lines = status_lines(&home, &policy);
+    let uncovered = lines.iter().find(|(ok, _)| !ok).unwrap();
+    assert!(
+        uncovered.1.contains("does not cover r.test") && uncovered.1.contains("proxy ca init"),
+        "{lines:?}"
+    );
+    assert!(
+        lines
+            .iter()
+            .any(|(ok, t)| !ok && t.contains("openmoat policy install exfil-endpoints.yaml")),
+        "{lines:?}"
+    );
+
+    let (_dir, home) = home_with_ca(&["r.test"], true);
+    let mut packs = crate::packs::Packs::default();
+    packs.packs.insert(
+        EXFIL_PACK.to_owned(),
+        crate::packs::Installed {
+            sha256: String::new(),
+            signer: "team".to_owned(),
+            at_ms: 0,
+        },
+    );
+    packs.save(&home.packs_path()).unwrap();
+    assert_eq!(
+        status_lines(&home, &policy),
+        [(true, "request rules: the proxy CA covers r.test".to_owned())]
+    );
 }

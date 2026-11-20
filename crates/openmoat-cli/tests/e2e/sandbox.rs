@@ -3,12 +3,14 @@
 use serde_json::Value;
 
 use crate::common::{OK, Sandbox, json, output, stdout, text};
+use crate::hosts::dir_of;
+use openmoat_hosts::Host;
 
 #[cfg(not(windows))] // #327: no Claude Code sandbox on native Windows
 #[test]
 fn show_prints_the_settings_and_their_losses_without_writing() {
-    let sb = Sandbox::installed(&[".claude"]);
-    let settings = sb.home.join(".claude/settings.json");
+    let sb = Sandbox::installed(&[&dir_of(Host::ClaudeCode)]);
+    let settings = crate::hosts::hook_file(&sb, Host::ClaudeCode);
     let before = std::fs::read(&settings).unwrap();
     let out = sb.moat(&["sandbox", "show"]);
     assert_eq!(out.status.code(), Some(OK), "{}", text(&out));
@@ -38,7 +40,7 @@ fn show_prints_the_settings_and_their_losses_without_writing() {
 
     let out = sb.moat(&["sandbox", "show", "--format", "json"]);
     let doc = json(&out);
-    let claude = &doc["hosts"]["claude-code"];
+    let claude = &doc["hosts"][Host::ClaudeCode.id()];
     assert_eq!(
         settings_json(claude)["sandbox"]["enabled"],
         Value::Bool(true)
@@ -48,7 +50,7 @@ fn show_prints_the_settings_and_their_losses_without_writing() {
             .as_array()
             .is_some_and(|l| !l.is_empty())
     );
-    let codex = doc["hosts"]["codex"]["settings"]
+    let codex = doc["hosts"][Host::Codex.id()]["settings"]
         .as_str()
         .unwrap_or_default();
     for expected in [
@@ -66,7 +68,7 @@ fn show_prints_the_settings_and_their_losses_without_writing() {
 #[cfg(not(windows))] // #327: no Claude Code sandbox on native Windows
 #[test]
 fn show_lists_each_secret_and_what_claude_code_does_with_it() {
-    let sb = Sandbox::installed(&[".claude"]);
+    let sb = Sandbox::installed(&[&dir_of(Host::ClaudeCode)]);
     let policy = sb.home.join(".moat/policy.yaml");
     let mut yaml = std::fs::read_to_string(&policy).unwrap();
     yaml.push_str(
@@ -94,7 +96,7 @@ fn show_lists_each_secret_and_what_claude_code_does_with_it() {
 #[cfg(not(windows))] // #327: no Claude Code sandbox on native Windows
 #[test]
 fn doctor_says_whether_claude_code_masks_each_secret() {
-    let sb = Sandbox::installed(&[".claude"]);
+    let sb = Sandbox::installed(&[&dir_of(Host::ClaudeCode)]);
     let policy = sb.home.join(".moat/policy.yaml");
     let mut yaml = std::fs::read_to_string(&policy).unwrap();
     yaml.push_str(
@@ -120,7 +122,7 @@ fn doctor_says_whether_claude_code_masks_each_secret() {
         assert!(shown.contains(expected), "{expected}: {shown}");
     }
 
-    let settings = sb.home.join(".claude/settings.json");
+    let settings = crate::hosts::hook_file(&sb, Host::ClaudeCode);
     let mut root: Value =
         serde_json::from_str(&std::fs::read_to_string(&settings).unwrap()).unwrap();
     root["sandbox"]["credentials"]["allowPlaintextInject"] = Value::Bool(true);
@@ -143,17 +145,20 @@ fn settings_json(host: &Value) -> Value {
 #[cfg(windows)]
 #[test]
 fn show_says_claude_code_has_no_sandbox_on_native_windows() {
-    let sb = Sandbox::installed(&[".claude"]);
+    let sb = Sandbox::installed(&[&dir_of(Host::ClaudeCode)]);
     let out = sb.moat(&["sandbox", "show"]);
     assert_eq!(out.status.code(), Some(OK), "{}", text(&out));
     let shown = stdout(&out);
     assert!(
-        shown.contains("Claude Code  sandbox not available on native Windows"),
+        shown.contains(&format!(
+            "{}  sandbox not available on native Windows",
+            Host::ClaudeCode.display_name()
+        )),
         "{shown}"
     );
     assert!(!shown.contains("failIfUnavailable"), "{shown}");
     let doc = json(&sb.moat(&["sandbox", "show", "--format", "json"]));
-    let claude = &doc["hosts"]["claude-code"];
+    let claude = &doc["hosts"][Host::ClaudeCode.id()];
     assert!(
         claude["unavailable"]
             .as_str()
@@ -166,13 +171,13 @@ fn show_says_claude_code_has_no_sandbox_on_native_windows() {
 #[cfg(not(windows))] // #327: no Claude Code sandbox on native Windows
 #[test]
 fn a_policy_without_read_roots_uses_the_default_list() {
-    let sb = Sandbox::installed(&[".claude"]);
+    let sb = Sandbox::installed(&[&dir_of(Host::ClaudeCode)]);
     std::fs::write(sb.home.join(".moat/policy.yaml"), "version: 1\n").unwrap();
     let out = sb.moat(&["sandbox", "show", "--format", "json"]);
     assert_eq!(out.status.code(), Some(OK), "{}", text(&out));
     let doc = json(&out);
     assert_eq!(doc["default_read_roots"], Value::Bool(true));
-    let settings = settings_json(&doc["hosts"]["claude-code"]);
+    let settings = settings_json(&doc["hosts"][Host::ClaudeCode.id()]);
     let allow = &settings["sandbox"]["filesystem"]["allowRead"];
     assert!(
         allow
@@ -243,11 +248,11 @@ fn show_prints_the_seatbelt_profile_for_the_project_here() {
 fn show_grants_codex_its_own_executable_on_linux() {
     use std::os::unix::fs::PermissionsExt as _;
 
-    let sb = Sandbox::installed(&[".codex"]);
+    let sb = Sandbox::installed(&[&dir_of(Host::Codex)]);
     let (bin, empty) = (sb.home.join("opt/bin"), sb.home.join("empty"));
     std::fs::create_dir_all(&bin).unwrap();
     std::fs::create_dir_all(&empty).unwrap();
-    let codex = bin.join("codex");
+    let codex = bin.join(Host::Codex.id());
     std::fs::write(&codex, "").unwrap();
     std::fs::set_permissions(&codex, std::fs::Permissions::from_mode(0o755)).unwrap();
     let codex = std::fs::canonicalize(codex).unwrap();
@@ -259,7 +264,7 @@ fn show_grants_codex_its_own_executable_on_linux() {
             None,
         );
         assert_eq!(out.status.code(), Some(OK), "{}", text(&out));
-        json(&out)["hosts"]["codex"].clone()
+        json(&out)["hosts"][Host::Codex.id()].clone()
     };
     let rule = |list: &Value| {
         list.as_array()

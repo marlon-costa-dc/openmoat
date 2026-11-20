@@ -21,6 +21,8 @@ use serde_json::Value;
 
 use super::claude::{FakeApi, PERL, claude_binary, python};
 use crate::common::{OK, Sandbox, json, output, skip_without_host_binary, text};
+use crate::hosts::{dir_of, hook_file};
+use openmoat_hosts::Host;
 
 #[cfg(any(target_os = "macos", target_os = "linux"))]
 mod in_run;
@@ -94,7 +96,7 @@ impl Home {
     /// `moat init --yes` runs with the pinned `claude` first on `PATH` and no
     /// version override, so it asks that binary which hook keys it knows.
     fn installed(agent: &Agent, before: impl FnOnce(&Path)) -> Self {
-        let sb = Sandbox::bare(&[".claude"]);
+        let sb = Sandbox::bare(&[&dir_of(Host::ClaudeCode)]);
         before(&sb.home);
         let dir = agent.claude.parent().expect("claude's directory");
         let inherited = std::env::var_os("PATH").unwrap_or_default();
@@ -113,7 +115,7 @@ impl Home {
 
     /// The settings file `moat init` wrote the hook into.
     fn settings(&self) -> PathBuf {
-        self.sb.home.join(".claude/settings.json")
+        hook_file(&self.sb, Host::ClaudeCode)
     }
 
     /// One `claude -p` session `session` in the project. The fake API asks for
@@ -165,7 +167,7 @@ impl Home {
             .as_array()
             .into_iter()
             .flatten()
-            .filter(|row| row["host"] == "claude-code")
+            .filter(|row| row["host"] == Host::ClaudeCode.id())
             .cloned()
             .collect()
     }

@@ -7,7 +7,9 @@ use std::process::Output;
 
 use serde_json::Value;
 
-use crate::common::{DENY, OK, Sandbox, USAGE, fixture, hook_output, output, stdout, text};
+use crate::common::{DENY, OK, Sandbox, USAGE, hook_output, host_fixture, output, stdout, text};
+use crate::hosts::{dir_of, hook_file};
+use openmoat_hosts::Host;
 
 /// `name` with this platform's executable suffix.
 fn exe(name: &str) -> String {
@@ -17,7 +19,10 @@ fn exe(name: &str) -> String {
 /// A home outside the temp directory (`init` refuses a binary inside one)
 /// with `bin/` holding nothing yet.
 fn home_with_bin() -> (Sandbox, PathBuf) {
-    let sb = Sandbox::bare_in(Path::new(env!("CARGO_TARGET_TMPDIR")), &[".claude"]);
+    let sb = Sandbox::bare_in(
+        Path::new(env!("CARGO_TARGET_TMPDIR")),
+        &[&dir_of(Host::ClaudeCode)],
+    );
     let bin = sb.home.join("bin");
     fs::create_dir_all(&bin).unwrap();
     (sb, bin)
@@ -50,7 +55,7 @@ fn one_line(out: &Output) -> String {
 }
 
 fn hook_command(sb: &Sandbox) -> String {
-    let settings = fs::read_to_string(sb.home.join(".claude/settings.json")).unwrap();
+    let settings = fs::read_to_string(hook_file(sb, Host::ClaudeCode)).unwrap();
     let settings: Value = serde_json::from_str(&settings).unwrap();
     settings["hooks"]["PreToolUse"][0]["hooks"][0]["command"]
         .as_str()
@@ -79,8 +84,8 @@ fn moat_runs_the_same_command_as_openmoat() {
     );
     let init = person(&sb, &openmoat, &["init", "--yes"]);
     assert_eq!(init.status.code(), Some(OK), "{}", one_line(&init));
-    let payload = fixture("claude-code/read.json");
-    let args = ["guard", "--host", "claude-code"];
+    let payload = host_fixture(Host::ClaudeCode, "read.json");
+    let args = ["guard", "--host", Host::ClaudeCode.id()];
     let direct = run(&sb, &openmoat, &args, Some(&payload));
     let through = run(&sb, &moat, &args, Some(&payload));
     assert_eq!(
@@ -107,8 +112,8 @@ fn moat_without_openmoat_beside_it_fails_closed() {
     let out = run(
         &sb,
         &moat,
-        &["guard", "--host", "claude-code"],
-        Some(&fixture("claude-code/read.json")),
+        &["guard", "--host", Host::ClaudeCode.id()],
+        Some(&host_fixture(Host::ClaudeCode, "read.json")),
     );
     assert_eq!(
         out.status.code(),
@@ -152,7 +157,7 @@ fn init_moves_hooks_written_as_moat_to_openmoat() {
     let init = person(&sb, &moat, &["init", "--yes"]);
     assert_eq!(init.status.code(), Some(OK), "{}", one_line(&init));
     assert_eq!(Path::new(&hook_command(&sb)), moat);
-    let before = fs::read_to_string(sb.home.join(".claude/settings.json")).unwrap();
+    let before = fs::read_to_string(hook_file(&sb, Host::ClaudeCode)).unwrap();
 
     // The upgrade installs `openmoat` and turns `moat` into the alias.
     fs::copy(env!("CARGO_BIN_EXE_openmoat"), &openmoat).unwrap();
@@ -162,11 +167,11 @@ fn init_moves_hooks_written_as_moat_to_openmoat() {
     // Nothing breaks before `init`: the hook still decides, and doctor counts
     // it as installed and says how to switch. (The sandbox settings now also
     // name `openmoat`, so doctor asks for a sync, which `init` does too.)
-    let payload = fixture("claude-code/read.json");
+    let payload = host_fixture(Host::ClaudeCode, "read.json");
     let hook = run(
         &sb,
         &moat,
-        &["guard", "--host", "claude-code"],
+        &["guard", "--host", Host::ClaudeCode.id()],
         Some(&payload),
     );
     assert_eq!(
@@ -208,7 +213,7 @@ fn init_moves_hooks_written_as_moat_to_openmoat() {
     let hook = run(
         &sb,
         &openmoat,
-        &["guard", "--host", "claude-code"],
+        &["guard", "--host", Host::ClaudeCode.id()],
         Some(&payload),
     );
     assert_eq!(

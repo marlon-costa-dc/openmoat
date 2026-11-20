@@ -53,6 +53,8 @@ pub struct Trust {
     /// `None` when no system bundle was found: then only the adding variables
     /// are set, and clients that replace their roots do not trust the CA.
     bundle: Option<PathBuf>,
+    /// Left in place when dropped: a session's, not a run's.
+    keep: bool,
 }
 
 impl Trust {
@@ -68,12 +70,52 @@ impl Trust {
     /// its commands may read (`commands/run/temp.rs`).
     pub fn write_in(cert_pem: &str, temp: &std::path::Path) -> Result<Self> {
         let dir = temp.join(format!("moat-run-{}-ca", std::process::id()));
+        Self::write_at(cert_pem, dir, false)
+    }
+
+    /// The trust files of agent session `session` of the standalone proxy
+    /// (ADR-062 §2), in the temp directory, kept when this is dropped: the
+    /// session's commands read them for as long as it lasts, and its next
+    /// start writes them again. The folder is in the per-user runtime
+    /// directory where there is one (`XDG_RUNTIME_DIR`), else in the temp
+    /// directory (per user on macOS). A folder that is a symbolic link or a
+    /// file, that another user owns, or that others may enter, is refused: one
+    /// planted before OpenMoat made it could have its files swapped.
+    pub fn write_for_session(cert_pem: &str, session: &str) -> Result<Self> {
+        let base = std::env::var_os("XDG_RUNTIME_DIR")
+            .map(PathBuf::from)
+            .filter(|p| p.is_absolute() && p.is_dir())
+            .unwrap_or_else(std::env::temp_dir);
+        let base = std::fs::canonicalize(base).context("resolving the temp directory")?;
+        let dir = base.join(format!("moat-session-{session}-ca"));
+        if let Ok(meta) = std::fs::symlink_metadata(&dir) {
+            if !meta.is_dir() || meta.file_type().is_symlink() {
+                anyhow::bail!(
+                    "{} is not a directory OpenMoat made (a symbolic link or a file)",
+                    dir.display()
+                );
+            }
+            // Others' bits first, so nothing is written into a shared folder.
+            crate::key_file::private_folder(&dir, &dir)?;
+        }
+        let trust = Self::write_at(cert_pem, dir, true)?;
+        if let Err(error) = crate::key_file::private_folder(&trust.dir, &trust.ca) {
+            let mut trust = trust;
+            trust.keep = false;
+            drop(trust);
+            return Err(error);
+        }
+        Ok(trust)
+    }
+
+    fn write_at(cert_pem: &str, dir: PathBuf, keep: bool) -> Result<Self> {
         let ca = dir.join("ca.pem");
         write_private(&ca, cert_pem.as_bytes())?;
         let mut trust = Self {
             dir,
             ca,
             bundle: None,
+            keep,
         };
         let person = std::env::var_os("SSL_CERT_FILE").map(PathBuf::from);
         let base = person
@@ -124,6 +166,9 @@ impl Trust {
 
 impl Drop for Trust {
     fn drop(&mut self) {
+        if self.keep {
+            return;
+        }
         let _ = std::fs::remove_file(&self.ca);
         if let Some(bundle) = &self.bundle {
             let _ = std::fs::remove_file(bundle);

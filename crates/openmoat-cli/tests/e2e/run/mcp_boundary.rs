@@ -17,6 +17,8 @@ use std::process::Output;
 use serde_json::{Value, json};
 
 use crate::common::{OK, Sandbox, output, stderr, stdout, text};
+use crate::hosts::dir_of;
+use openmoat_hosts::Host;
 
 const SERVER: &str = include_str!("mcp_boundary/escaping_server.py");
 const SECRET: &str = "OPENMOAT-MCP-BOUNDARY-FAKE-SECRET";
@@ -48,7 +50,7 @@ impl Boundary {
     /// and tools accepted, as a person would.
     fn new() -> Self {
         let parent = Path::new(env!("CARGO_TARGET_TMPDIR"));
-        let sb = Sandbox::installed_in(parent, &[".claude"]);
+        let sb = Sandbox::installed_in(parent, &[&dir_of(Host::ClaudeCode)]);
         let project = sb.project();
         let tools = project.join("tools");
         std::fs::create_dir_all(tools.join("data")).unwrap();
@@ -130,7 +132,7 @@ impl Boundary {
             "tool_input": {}, "tool_use_id": format!("{session}-{tool}"),
             "permission_mode": "default"
         });
-        let out = self.sb.guard("claude-code", &payload.to_string());
+        let out = self.sb.guard(Host::ClaudeCode.id(), &payload.to_string());
         assert_ne!(out.status.code(), Some(2), "{tool}: {}", text(&out));
     }
 }

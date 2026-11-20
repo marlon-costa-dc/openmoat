@@ -6,6 +6,8 @@
 use super::confined::ran;
 use super::{installed_with_secret, run_sh};
 use crate::common::{stdout, text};
+use crate::hosts::dir_of;
+use openmoat_hosts::Host;
 
 /// On macOS Seatbelt denies them after every grant, wherever they are in the
 /// project, existing or not, and in either case; `.claude`, `.codex` and the
@@ -19,8 +21,8 @@ fn agent_configuration_and_directories_cannot_be_written_or_moved() {
     let (sb, project) = installed_with_secret();
     // The directories exist: what is denied is the configuration inside.
     for dir in [
-        ".codex",
-        ".claude",
+        &dir_of(Host::Codex),
+        &dir_of(Host::ClaudeCode),
         "sub/.cursor",
         "planted",
         ".github",
@@ -53,7 +55,16 @@ fn agent_configuration_and_directories_cannot_be_written_or_moved() {
     let shown = text(&out);
     assert_eq!(out.status.code(), Some(OK), "{shown}");
     for denied in [
-        "mcp", "case", "hooks", "cursor", "move", "replace", "github", "pi", "cline", "clinedir",
+        "mcp",
+        "case",
+        "hooks",
+        Host::Cursor.id(),
+        "move",
+        "replace",
+        "github",
+        Host::Pi.id(),
+        Host::Cline.id(),
+        "clinedir",
         "gemini",
     ] {
         assert!(
@@ -95,7 +106,7 @@ fn existing_agent_configuration_is_read_only_in_the_network_namespace() {
     std::fs::write(project.join(".mcp.json"), "{}").unwrap();
     for dir in [
         ".github/hooks",
-        ".claude",
+        &dir_of(Host::ClaudeCode),
         ".clinerules/hooks",
         ".gemini/commands",
     ] {
@@ -126,7 +137,13 @@ fn existing_agent_configuration_is_read_only_in_the_network_namespace() {
         return;
     }
     for denied in [
-        "mcp", "remove", "settings", "github", "claude", "cline", "gemini",
+        "mcp",
+        "remove",
+        "settings",
+        "github",
+        "claude",
+        Host::Cline.id(),
+        "gemini",
     ] {
         assert!(
             !stdout(&out).contains(&format!("{denied}=0\n")),
@@ -162,12 +179,13 @@ fn existing_agent_configuration_is_read_only_in_the_network_namespace() {
 #[test]
 fn a_linked_agent_folder_keeps_its_hook_settings_out_of_reach() {
     use crate::common::{USAGE, output, stderr};
+    use crate::hosts::hook_file_name;
 
     let (sb, project) = installed_with_secret();
     let real = sb.home.join("real-claude");
     std::fs::create_dir_all(&real).unwrap();
-    std::fs::write(real.join("settings.json"), "{}").unwrap();
-    std::os::unix::fs::symlink(&real, sb.home.join(".claude")).unwrap();
+    std::fs::write(real.join(hook_file_name(Host::ClaudeCode)), "{}").unwrap();
+    std::os::unix::fs::symlink(&real, sb.home.join(dir_of(Host::ClaudeCode))).unwrap();
     let tmp = sb.home.with_file_name("tmp");
     std::fs::create_dir_all(&tmp).unwrap();
     let out = output(
@@ -176,7 +194,7 @@ fn a_linked_agent_folder_keeps_its_hook_settings_out_of_reach() {
             .env("TMPDIR", &tmp)
             .args(["run", super::LIGHTWEIGHT])
             .arg("--write")
-            .arg(sb.home.join(".claude"))
+            .arg(sb.home.join(dir_of(Host::ClaudeCode)))
             .args(["--", "/bin/sh", "-c"])
             .arg("echo x >> \"$HOME/.claude/settings.json\"; echo \"w=$?\""),
         None,
@@ -197,7 +215,7 @@ fn a_linked_agent_folder_keeps_its_hook_settings_out_of_reach() {
         assert!(!stdout(&out).contains("w=0\n"), "{shown}");
     }
     assert_eq!(
-        std::fs::read_to_string(real.join("settings.json")).unwrap(),
+        std::fs::read_to_string(real.join(hook_file_name(Host::ClaudeCode))).unwrap(),
         "{}",
         "{shown}"
     );
@@ -262,7 +280,7 @@ fn missing_hook_settings_cannot_be_created() {
             }
             continue;
         }
-        for denied in ["gemini", "copilot", "claude", "codex", "move"] {
+        for denied in ["gemini", "copilot", "claude", Host::Codex.id(), "move"] {
             assert!(
                 !stdout(&out).contains(&format!("{denied}=0\n")),
                 "{denied} (isolate {isolate}): {shown}"

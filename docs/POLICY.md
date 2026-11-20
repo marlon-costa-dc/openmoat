@@ -20,7 +20,7 @@ the operating system also bounds what the call can reach ([SANDBOX.md](SANDBOX.m
 ## 1. Shape
 
 ```yaml
-version: 1                          # required; only 1 is supported
+version: 1                          # required: the policy schema version (§1.1); only 1 exists
 
 defaults:                           # verdict when no rule matches: allow, defer, review or deny
   "*": defer                        #   one verdict for everything, or a map per kind
@@ -48,6 +48,8 @@ sandbox:                            # optional: what the host sandboxes may read
   project_hook_off: refuse          # optional, your own policy only: `start` lets `openmoat run` start an agent whose project turns its hook off (§9.5)
 
 secrets:    [ <secret>, … ]         # values OpenMoat keeps from the agent (§2.1)
+requests:   [ <request rules>, … ]  # method and path rules for allowed hosts (§2.3)
+requests_untrusted: refuse          # optional, your own policy only: `relay` passes what `openmoat proxy` cannot read (§2.3)
 
 taint:                              # optional: more paths session taint protects (§4.1)
   protected_writes: ["**/deploy/**"]
@@ -103,6 +105,95 @@ The file is YAML 1.2, read strictly (ADR-024): a key repeated in one mapping, a 
 (`<<`) and a tag OpenMoat does not know (`!env`) are errors, only `true` and `false` are
 booleans (`yes`, `no`, `on`, `off` are text), and anchors and aliases (`&paths`, `*paths`)
 work as usual.
+
+### 1.1 Schema version (`version:`) and `openmoat policy migrate`
+
+`version:` is the policy schema version: the format the file is written in, not the
+release that wrote it or the rules it holds (ADR-103). Version 1 is the only one, and every
+policy, repository policy and pack any release wrote says `version: 1`. It is stable:
+
+- a later release may add a key to version 1, always optional and with a default that
+  keeps what an older file means (the keys above marked "since" came that way);
+- a key, value or rule field of version 1 is never renamed, removed or given another
+  meaning. A spelling version 1 once had stays readable: `ask` (§1 above);
+- a change that cannot keep to that is a new schema version, shipped with a migration
+  step for `openmoat policy migrate` and read beside the old one for at least one minor
+  release.
+
+The version is read before anything else, so the error says what to do:
+
+| The file | The error starts | What to do |
+|---|---|---|
+| has no `version:` | `the policy has no version:` | add `version: 1` as its first key, or run `openmoat policy migrate` |
+| names a newer version | `unsupported policy version 2: … written for policy schema version 2` | upgrade OpenMoat |
+| names version 0 | `unsupported policy version 0` | set `version: 1`; `openmoat policy migrate` says so |
+| has a key or value version 1 does not have | `policy parse error (policy schema version 1): unknown field …` | the field is named, with its line and column |
+
+A policy that does not load decides nothing: every guard call is denied until it is fixed.
+
+`openmoat policy migrate` rewrites a policy in the current schema, on its text, so
+comments, order and every rule stay as written. It never adds a rule: new default rules
+are `openmoat policy upgrade`'s. Within version 1 it adds `version: 1` to a file without
+it and renames `ask` to `review`; later versions add their own steps.
+
+```bash
+openmoat policy migrate --dry-run                # what it would change, as a diff; changes nothing
+openmoat policy migrate                          # the installed policy: shows the diff, asks, keeps
+                                                 # policy.yaml.before-migrate, re-pins the lock
+openmoat policy migrate --file .moat/policy.yaml # a repository policy, kept beside it the same way
+```
+
+Like the other commands that change what OpenMoat trusts, it applies a change only for a
+person at a terminal, and never with an agent among its parent processes; the installed
+policy is not rewritten over a drifted lock. A repository policy a person trusted needs
+`openmoat trust` again once its file changes (§10).
+
+#### JSON Schema for editors
+
+Schema version 1 is also a JSON Schema (draft 2020-12), so an editor can complete keys
+and flag a misspelt one as you type. There are two files, because a repository policy
+accepts fewer keys than yours:
+
+| File | For | `$id` |
+|---|---|---|
+| [`policy-v1.schema.json`](../crates/openmoat-core/policies/policy-v1.schema.json) | your policy, `~/.moat/policy.yaml` | `https://raw.githubusercontent.com/crocodile-labs/openmoat/main/crates/openmoat-core/policies/policy-v1.schema.json` |
+| [`repo-policy-v1.schema.json`](../crates/openmoat-core/policies/repo-policy-v1.schema.json) | a repository policy, `<project>/.moat/policy.yaml` (§10), and a pack (§11) | `https://raw.githubusercontent.com/crocodile-labs/openmoat/main/crates/openmoat-core/policies/repo-policy-v1.schema.json` |
+
+Editors that use the YAML language server (VS Code's YAML extension, Neovim, Zed, …) read
+a first-line comment naming the schema:
+
+```yaml
+# yaml-language-server: $schema=https://raw.githubusercontent.com/crocodile-labs/openmoat/main/crates/openmoat-core/policies/policy-v1.schema.json
+version: 1
+```
+
+OpenMoat ignores the comment, and neither `openmoat init` nor `openmoat policy upgrade`
+writes it: the file is yours. Your installed policy is pinned by the lock (§8), so add
+the line with `openmoat edit`, which re-pins it; written straight into the file, it is
+drift, and every call is denied (`kernel-integrity`) until `openmoat doctor --accept`. For a repository policy, VS Code can map the file
+instead, in the project's `.vscode/settings.json`:
+
+```json
+{
+  "yaml.schemas": {
+    "https://raw.githubusercontent.com/crocodile-labs/openmoat/main/crates/openmoat-core/policies/repo-policy-v1.schema.json": ".moat/policy.yaml"
+  }
+}
+```
+
+The URLs follow `main`, which only ever adds optional keys to version 1 (above); to
+match the release you run, put its tag (`v<version>`) in place of `main`, from the first
+release that has the files.
+
+The schema checks the shape: keys, types, verdicts and the other fixed words, the old
+`ask` marked deprecated. `openmoat policy lint` stays the check that counts. It also
+checks what a schema of shapes does not say: patterns, unique rule ids, a rule group
+with no pattern, and the rules between keys (`hook_only` on `deny` groups only, a
+secret's `port` only with `plain_http`). One difference goes the other way: OpenMoat
+reads a key with no value (`taint:` with every line under it commented out) as absent,
+where the schema asks for a value. The schemas are written by hand and tested against
+the policy model, the default policy, the packs and the examples on this page
+(`crates/openmoat-core/tests/policy_schema/`).
 
 ## 2. Rule groups
 
@@ -426,6 +517,97 @@ that an administrator installed.
 - **Masking.** Every value it gave (the last five) is masked in the proxy's audit rows,
   and the leak and echo checks look for the value it replaced too.
 
+### 2.3 Request rules for allowed hosts (`requests:`)
+
+An allowed host can receive data: `registries` allows `api.github.com` for `git`, `gh` and
+the agents' GitHub tools, and with it `POST /gists`, which publishes what it is sent.
+`requests:` lists method and path rules for one host each (ADR-062). They only narrow what
+`net` and `fetch` allow; they never open a host.
+
+```yaml
+requests:
+  - id: exfil-gists               # lowercase letters, digits and `-`
+    host: api.github.com          # one lowercase DNS name: no address, port or pattern
+    hook_only: true               # optional: the hook holds the rules, the proxy does not
+    deny: ["POST /gists", "PATCH /gists/**", "POST /gists/*/comments"]
+  - id: github-api                # with a proxy CA: the proxy holds it too
+    host: api.github.com
+    allow: ["GET /**", "HEAD /**", "POST /repos/*/*/issues", "POST /repos/*/*/pulls"]
+
+requests_untrusted: refuse        # optional, your own policy only: or `relay` (below)
+```
+
+- **Rules** are written as a secret's `allow` rules (§2.1): `METHOD /path`, the method in
+  capitals, segments literal, `*` (one) or `**` (any number); `TRACE`, `TRACK` and
+  `CONNECT` are refused; at most 64 per list. `deny` is tried first and wins over every
+  `allow`, a secret's included. With an `allow` list, a request no `allow` rule of the
+  host's entries names is refused; with only `deny`, everything else passes. A deny rule
+  matches the method and the path in any letter case and with or without a trailing `/`
+  (`post /Gists/` is `POST /gists`); an allow rule matches as written. A path the server
+  could read as another (`..` in any spelling, `%2f`, `;`, `//`) and a request that asks for
+  another method (`X-HTTP-Method-Override` and the like, a `_method` parameter) are refused
+  whatever the rules say. Several entries may name one host; their rules add up.
+- **In the hook**, every entry applies. The hook reads the requests a command will send:
+  `curl` (`-X`/`--request`, data and form options imply `POST`, `-T` `PUT`, `-I` `HEAD`,
+  `-G`), `wget` (`--method`, `--post-data`, `--post-file`), HTTPie and `xh` (`[METHOD] URL
+  [ITEM …]`), `gh api` (`-X`, fields imply `POST`, `--hostname`) and `gh gist create`,
+  `edit`, `delete`, `list`, `view`, through every wrapper the classifier unwraps
+  (`sudo`, `sh -c`, …); a fetch tool's URL is a `GET`. A request the rules refuse is
+  denied (`request-rule`). One the hook cannot read in full, where a rule could refuse it,
+  needs review (`request-rule`): a URL, host or method made at run time (`curl -d @f
+  "$URL"`), a curl URL glob, options from a file (`curl -K`, `wget -i`, `wget -e`,
+  `wget --config`), `curl --next` and `--request-target`, a request curl may send to
+  another host than its URL (`--connect-to`, `--resolve`, a `Host:` header), a variable
+  that moves the client's configuration file or gh's host (`HOME`, `CURL_HOME`,
+  `XDG_CONFIG_HOME`, `WGETRC`, `GH_HOST`), a `gh alias set` or `gh alias import` that
+  runs `gh api` or `gh gist`, inline interpreter code (`python3 -c`, `node -e`, …) that
+  writes the host's URL with a word that marks a write (`post`, `data=`, `method`), and
+  an HTTPie, `xh` or `curlie` request with no method or data and no `--ignore-stdin`,
+  which may send standard input as a `POST` body. `gh api --hostname` is read as gh
+  reads it (`GITHUB.COM` and names under github.com are api.github.com). Other `gh` commands (`gh pr create`, `gh issue list`) choose
+  their own requests, which the command does not show, and are not read; nor is a script
+  or a program that builds its own request.
+- **At the proxy**, an entry without `hook_only` is held inside HTTPS: the proxy terminates
+  TLS to its host as for a `tls: terminate` secret (§2.1) and checks each request before
+  anything goes upstream; a refusal is a `request-rule` row naming the method and the
+  rule, never the path. `openmoat run`'s proxy terminates for its session. The standalone
+  `openmoat proxy` terminates only for a session that received the proxy CA's trust files:
+  Claude Code's `SessionStart` hook writes the CA's certificate and a bundle to
+  `$TMPDIR/moat-session-<id>-ca/` and exports `NODE_EXTRA_CA_CERTS`, `SSL_CERT_FILE`,
+  `REQUESTS_CA_BUNDLE`, `PIP_CERT`, `CURL_CA_BUNDLE`, `GIT_SSL_CAINFO` and
+  `CARGO_HTTP_CAINFO` in the session's environment file, beside its credential, which
+  then carries the trust mark (§9). A connection it cannot terminate (another agent's,
+  one without a credential, or no CA that covers the host) is refused with
+  `request-rule` under `requests_untrusted: refuse`, the default, or relayed unread with
+  a note under `relay`.
+- **A proxy CA** (`openmoat proxy ca init`) covers the hosts of those entries as well as
+  the `tls: terminate` secrets'. Without one, or with one made before a host was added,
+  `openmoat run` stops before the agent starts, and `openmoat proxy` says so at start-up
+  and refuses (or relays) the host's connections; a host a repository's entry adds that
+  the CA does not cover is refused (or relayed) the same way, never terminated.
+  `openmoat doctor` and `openmoat status` name such a host, and say when a CA exists
+  without the `exfil-endpoints` pack. `hook_only` entries need none.
+- **Session taint.** After a secret read, a terminated tunnel to a `requests:` host stays
+  open for reads: `GET`, `HEAD` and `OPTIONS` without a body pass, anything else is
+  refused with `session-taint` (§4.1). Every other host keeps the whole-host refusal
+  (§5.2).
+- **Repository policies and packs** may add entries with `deny` lists only, trusted or
+  not (§10, §11); an `allow` list there is a parse error, and `requests_untrusted` is your
+  own policy's alone. Their entries are held by the hook alone (`hook_only`) unless your
+  own policy has the proxy hold the same host, so a repository cannot make the proxy
+  terminate, and without a CA refuse, a host your git and package managers use.
+- **The default policy** ships one hook-only entry, `exfil-gists`, for GitHub's gist
+  endpoints, and a commented recipe for one the proxy holds. The signed-pack source
+  `crates/openmoat-core/policies/packs/exfil-endpoints.yaml` lists the same denies
+  (§11), held by the proxy only where your own policy has it hold api.github.com.
+- **After a secret read**, a tainted session's reads through a terminated tunnel are
+  also limited to a target of at most 2048 bytes, so a long query cannot carry it.
+- `openmoat policy lint` warns about an entry no `net` or `fetch` allow rule reaches, and
+  says what the proxy needs for an entry without `hook_only`.
+- **What they do not do**: read bodies (an allowed write endpoint, such as an issue
+  comment, can still carry data), tell a GraphQL query from a mutation (`POST /graphql` is
+  one path), or read HTTP/2, which terminated tunnels refuse (THREAT_MODEL T12).
+
 ## 3. Pattern syntax
 
 ### 3.1 Shell patterns
@@ -456,7 +638,7 @@ Tokenised with the same lexer as commands, so `a|b` and `a | b` are equal.
 - Text tools (`sort`, `uniq`, `cut`; `shell/text.rs`) have their options read the way getopt reads them, GNU order included (options after operands). An option value is data, not a file: `cut -d '/' -f 2 x` reads only `x`. A value that follows an operand is also a file, since BSD getopt stops at the first operand. Files they write are `fs.write`s: `sort -o FILE`/`--output`/`-T DIR` and `uniq`'s second operand (`uniq in out`). An option the classifier does not know, including GNU abbreviations of long options, becomes its own `<program> @<option>` shell action (`sort @--compress-program=gzip`), which `text-tools` excludes, so the command needs review.
 - Option values that name files (`shell/path_options.rs`) are read in every spelling the tool takes: the next word (`cmake -B dir`), after `=` (`--target-dir=dir`) and, for a single-letter option, attached (`cmake -Bdir`). For `cmake`, `ctest`, `go`, `dotnet`, `mvn`, `gradle`, `cargo`, `make`, `npm`, `pnpm`, `yarn`, `tsc`, `pytest` (also `python -m pytest`), `uv`, `rake`, `rspec` (also `bundle exec rspec`), `phpunit`, `docker` and `swift`, an output or build directory is an `fs.write` (`cmake -B`/`--build`, `go build -o`, `dotnet -o`, `cargo --target-dir`, `pytest --basetemp`, `mvn -Dmaven.repo.local=`, …) and an input an `fs.read` (`cmake -S`, `go -C`/`-modfile`, `mvn -f`/`-s`, `gradle -p`, `make -C`/`-f`/`-I`, `uv run --directory`, …), so outside the project the default policy defers them. An option that loads code from a file or module (`cmake -C`/`-P`/`--toolchain`, `ctest -S`, `gradle -I`/`--init-script`, `cargo --config`, `pytest -p` other than `-p no:<name>`, `rake`/`rspec -r`/`--require`, `phpunit --bootstrap`, `dotnet test --test-adapter-path`) leaves the command `unparseable`, so no allow rule covers it (§4 step 5: the default policy defers it). For every program, a short option with a path attached (`-X/…`, `-X~/…`, `-X./…`, `-X../…`, `-X=/…`) is an `fs.read` and an `fs.write` of that path (`git diff -O/tmp/order`, `ssh -i~/.ssh/id_rsa`); `-j4`, `-O2`, `-DNAME=1`, a bare `/` (`tr -d/`), the backup suffix of `sed -i~` and patterns attached to `grep -e`, `rg -e`/`-g`, `ag -G` or a `tr` option are not paths, while `grep -f/x` reads `/x`.
 - Database shells (`sqlite3`, `sqlite`, `duckdb`; `shell/database.rs`) open their database file read-write and create it when missing, so the database operand is an `fs.write`, a plain name included (`sqlite3 audit.db 'delete …'` after `cd ~/.moat` meets `kernel-self`). Their SQL and dot-commands open more files (`attach '…'`, `.open`, `.output`, `.backup`, `vacuum into '…'`), so every word that looks like a path in an SQL argument, a `-cmd`/`-c`/`-s` value or stdin the line shows is an `fs.write` too; a `file:` URI is its file. Only `-readonly` turns these into `fs.read`s. `-init FILE` is a read, and `:memory:` is no file. No default rule allows these tools (`.shell` runs programs), so they are never `allow` (the default policy defers them).
-- A `sed` script is data too (`shell/sed/`): its words are not files (`sed -n '/^fn/,/^}/p' f` reads only `f`). The script is read with the commands and addresses GNU and BSD sed share (`p`, `d`, `s///`, `y`, `a`/`i`/`c`, `b`/`t`/`:`, `q`, `l`, `=`, `n`, `N`, `g`, `h`, `x`, `{}`, …). `r FILE`/`R FILE` are `fs.read`s and `w FILE`/`W FILE`/the `s///w FILE` flag `fs.write`s of `FILE` taken literally (sed does not expand `~`). A script that runs a command (`e`, the `s///e` flag), uses any other command, or cannot be read completely becomes a `sed @<script>` shell action, as do `-f FILE` (whose `FILE` is also an `fs.read`) and unknown options. `-i`/`--in-place` makes every file operand an `fs.write`, and its backup too (`-i.bak` writes `f.bak`; a suffix with `/` or `*`, which GNU sed reads as another directory, is reported). A bare `-i` is read both ways: GNU sed takes no suffix, BSD sed takes the next word. `-i ''` is the BSD empty suffix (the next operand is checked as a script and as a file), `-i -e …` gives BSD the suffix `-e`, and any other word after a bare `-i` (`sed -i 's/a/b/' f g`, a script to GNU and a suffix to BSD) is reported, except as the last two words with no script before them: in `sed -i 's/a/b/' f` BSD sed takes `f` as its script, has no file left to edit and stops before reading input, so when `f` holds no `w` (the only command that acts while the script is compiled) the command is GNU's reading alone and writes `f`.
+- A `sed` script is data too (`shell/sed/`): its words are not files (`sed -n '/^fn/,/^}/p' f` reads only `f`). The script is read with the commands and addresses GNU and BSD sed share (`p`, `d`, `s///`, `y`, `a`/`i`/`c`, `b`/`t`/`:`, `q`, `l`, `=`, `n`, `N`, `g`, `h`, `x`, `{}`, …). `r FILE`/`R FILE` are `fs.read`s and `w FILE`/`W FILE`/the `s///w FILE` flag `fs.write`s of `FILE` taken literally (sed does not expand `~`). A script that runs a command (`e`, the `s///e` flag), uses any other command, or cannot be read completely becomes a `sed @<script>` shell action, as does a script the shell expands a variable or a command substitution into whose value the line does not show (`read n; sed -n "${n}p" f`, where `n` may be `1e id`; `"$n"` reads as the address `$` and the command `n`), and so do `-f FILE` (whose `FILE` is also an `fs.read`) and unknown options. `-i`/`--in-place` makes every file operand an `fs.write`, and its backup too (`-i.bak` writes `f.bak`; a suffix with `/` or `*`, which GNU sed reads as another directory, is reported). A bare `-i` is read both ways: GNU sed takes no suffix, BSD sed takes the next word. `-i ''` is the BSD empty suffix (the next operand is checked as a script and as a file), `-i -e …` gives BSD the suffix `-e`, and any other word after a bare `-i` (`sed -i 's/a/b/' f g`, a script to GNU and a suffix to BSD) is reported, except as the last two words with no script before them: in `sed -i 's/a/b/' f` BSD sed takes `f` as its script, has no file left to edit and stops before reading input, so when `f` holds no `w` (the only command that acts while the script is compiled) the command is GNU's reading alone and writes `f`.
 - An `awk` program is data as well (`shell/awk.rs`); its words are not files (`awk '/error/ {print}' log` reads only `log`). awk stops reading options at the program, so only `-F` and `-v` before it are options, and every later word is a file or an assignment. A program containing `system`, `getline`, `ENVIRON`, `ARGV`, `close(`, `fflush(` or `@` (gawk's `@include`, `@load`, indirect calls), a `|` that is not part of `||` (a pipe), or a `>` after its first `print` (output redirection), becomes an `awk @<program>` shell action, as do a program the shell expands a variable or a command substitution into (`awk "$prog"`), `-f FILE` and any other option. The words are looked for in the raw text, strings and regexes included, so quoting cannot hide them, and a string that happens to contain one needs review. `|` and `>` are looked for outside string and regex literals, where awk reads them as a pipe or a redirection; inside one they are alternation or text, so `/a|b/ {print}`, `/- Only a `$` the shell expands is an `env.read`: an unquoted or double-quoted `$NAME`/`${NAME}` (`"$AWS_SECRET_ACCESS_KEY"` is a read), one in an unquoted here-document body, or one in a `<<<` word outside single quotes. The lexer records which part of each word came from single quotes, so `$p` in `sed -n '$p'` and `$NF` in `awk '{print $NF}'` read nothing, and in `'$p'"$TOKEN"` only `TOKEN` is read. Code handed to another shell is classified again as that shell sees it: `sh -c 'echo $SECRET'` and `eval 'echo $SECRET'` read `SECRET`. `$'…'` (ANSI-C quoting) is decoded the way bash decodes it (`\x2f` and `\057` are `/`, `\'` a quote), so `cat $'\x2f'Users/me/.ssh/id_rsa` is a read of that key and `$'moat'` is `moat`; a `$` in the decoded text is still scanned as if unquoted. `$"…"` (locale quoting) is read as `"…"`. A quoted here-document delimiter (`<<'EOF'`) keeps the body literal. `$1`-style field references are not variables and stay allowed. A test of whether a variable is set shows nothing of its value and is no `env.read`: `[ -n "$X" ]`, `[ -z "$X" ]`, `test -n "$X"` and `[[ -n $X ]]` when the single `$X`/`${X}` is the operand of `-n`/`-z` (`[ "$X" = y ]`, `[ -n "${X:0:4}" ]` and `[ -n "$X$Y" ]` are reads), and the expansions `${#X}` (its length), `${X:+word}` and `${X+word}` (the word, or nothing; a `$` inside the word is its own reference, so `${X:+$X}` reads `X`). Where GNU and BSD sed would split a script differently (a delimiter inside a bracket expression, text after a label), or take a different word for the script (BSD stops at the first operand, so in `sed p -e x f` it runs `p` and reads `-e` and `x`), every reading is checked and the word stays a file too.
 - A `perl -i` with `-p` or `-n` whose one `-e` program is only `s` substitutions (`perl -pi -e 's/a/b/g' f`, `-0pi`, `-pi.bak`, `-i -pe`, `-ni`, `-0777 -pi`; any delimiter or bracket pair, `s|a|b|; s/c/d/`) rewrites the files it names and opens nothing else (`shell/in_place.rs`): each file, and its backup, is an `fs.write`, the program is data, and the shell action is the canonical `perl @substitute <program>`, which `text-tools` allows, so the path rules decide (`src/lib.rs` allows, `~/.zshrc` is `shell-rc`, a hook under `.git` is `git-internals`). The `e` flag (which runs the replacement as code), a `$` that is not a capture (`$1`, `${1}`, `$&`) or an anchor, an `@` or a backtick (interpolation such as `@{[ system("id") ]}` runs code), `(?{ … })` in the pattern, anything beside the substitutions (`use …`, `system`, `open`), a `-M` module, a second `-e`, a program file, a program the shell expands a variable into, or no `-i` (`perl -pe 's/a/b/'` prints, so it writes nothing) is not recognised, and the command is decided as any other inline program (§3.1 below).
 - Only a `$` the shell expands is an `env.read`: an unquoted or double-quoted `$NAME`/`${NAME}` (`"$AWS_SECRET_ACCESS_KEY"` is a read), one in an unquoted here-document body, or one in a `<<<` word outside single quotes. The lexer records which part of each word came from single quotes, so `$p` in `sed -n '$p'` and `$NF` in `awk '{print $NF}'` read nothing, and in `'$p'"$TOKEN"` only `TOKEN` is read. Code handed to another shell is classified again as that shell sees it: `sh -c 'echo $SECRET'` and `eval 'echo $SECRET'` read `SECRET`. `$'…'` (ANSI-C quoting) is decoded the way bash decodes it (`\x2f` and `\057` are `/`, `\'` a quote), so `cat $'\x2f'Users/me/.ssh/id_rsa` is a read of that key and `$'moat'` is `moat`; a `$` in the decoded text is still scanned as if unquoted. `$"…"` (locale quoting) is read as `"…"`. A quoted here-document delimiter (`<<'EOF'`) keeps the body literal. `$1`-style field references are not variables and stay allowed. Where GNU and BSD sed would split a script differently (a delimiter inside a bracket expression, text after a label), or take a different word for the script (BSD stops at the first operand, so in `sed p -e x f` it runs `p` and reads `-e` and `x`), every reading is checked and the word stays a file too.
@@ -510,7 +692,7 @@ Consequences worth remembering:
 - A host is network evidence (`net`) when it comes from a URL with a scheme or from an argument of a program that names hosts (`curl`, `wget`, `ssh`, `scp`, `sftp`, `rsync`, `nc`, `ncat`, `netcat`, `telnet`, `ftp`, `ping`, `dig`, `nslookup`, `host`, `openssl`, `socat` (its `TCP:host:port` addresses), `mosh`, `lftp`, `aria2c`, `nmap`, `psql`, `mysql`, `redis-cli`, `mongo`, `mongosh`, `http`/`https`, `xh`, `curlie`, `wget2`, `whois`, `traceroute`, `mtr`, `git clone/fetch/pull/push/ls-remote`, also after git's global options such as `-C dir`); for these programs a quoted word is a host too (`curl 'host'`). In inline interpreter code a host in a quoted string is network evidence too (`urlopen('evil.com')`). Any other unquoted word that only looks like a host (`check_runs.0.id`, `config.dev`, `subprocess.run` in a here-document) is still matched by `net` rules, so a host you deny or allow is denied or allowed; when no rule matches it, the catch-all decides it (it is deferred in the default policy), not `defaults.net` (ADR-025).
 - An allow rule on `shell` does not allow the paths or hosts the command touches; those are evaluated separately. `cat ~/.ssh/id_rsa` is denied by the path rule even though `cat *` is allowed.
 - Arguments that name files become `fs.read`/`fs.write` actions even when they are relative: any word containing `/` (`s/id_rsa`, `src/main.rs`, the value of `--in=keys/k`), and every operand of programs that read or write their operands (`cat`, `head`, `tail`, `less`, `grep`, `rg`, `wc`, `diff`, `base64`, `tar`, `ls`, `find`, `cp`, `mv`, `rm`, `tee`, … ; `shell/tables.rs`), so `cat k` is a read of `<cwd>/k`. An editor (`vi`, `vim`, `nvim`, `nano`, `emacs`, `code`) saves the file it opens, so each of its file operands is an `fs.write` as well: `vim ~/.zshrc` is denied by `shell-rc` and `nano ~/.moat/policy.yaml` by `kernel-self`, like a write of them, while `vim src/main.rs` keeps its verdict; a folder it browses (`code .`, `vim ~`, a word ending in `/`) is no write. Options before `--`, URLs, remote specs (`host:dir`) and the arguments of `echo`/`printf` are not files. Inside the project these reads cost nothing (`project-fs` allows them); an option value such as the `5` in `head -n 5 f` becomes a harmless read of `<cwd>/5`.
-- A reserved word that starts a command inside a compound one (`do`, `then`, `else`, `elif`, `if`, `while`, `until`, `!`, `{`) is not the program: `for f in a; do cat x; done` is the command `cat x`, and `done`, `fi`, `}` and `esac` alone run nothing. `for NAME in WORDS` is an `env.set` of `NAME`, and the words are read like any others. A variable set by a command of its own earlier on the line (`n=3; git log -$n`, a `for` variable, `export X=v`; also `readonly`, `local`, `declare` and `typeset` without options, which may set an array, a number or a reference) is a shell variable. When every value it can hold is text the line shows (no `$`, `$( … )`, glob or quoted `~`), it is substituted where it is used and the command is classified once per value, so `d=~/.ssh; cat $d/id_rsa` and `X=~/.ssh; cat $X/id_rsa` are reads of `~/.ssh/id_rsa`. Reading a lowercase one is then no `env.read`; an uppercase name, by convention an environment variable, keeps its `env.read`, and so does any variable whose value is not known. A prefix assignment (`D=x cmd $D`) does not count: the shell expands `$D` before it. A quote or a backslash ends a variable's name, as in the shell: `"$d"_rsa`, `$d'_rsa'`, `$d"_rsa"` and `$d\_rsa` use `d` followed by `_rsa`, read as `${d}_rsa` (so `d=~/.ssh/id; cat "$d"_rsa` is a read of `~/.ssh/id_rsa`, and `echo "$GITHUB_TOKEN"x` reads `GITHUB_TOKEN`). A path that still contains a variable the shell expands (other than `$HOME` and `$PWD`, unless the line gave them a value it does not show, as `read HOME` or `HOME=$(cat f)` do; `${project}` is the policy's syntax, so in a command it is the shell's variable `project`, read as empty), or the output of a command (`cat $(cat list)`, `` cat `cmd` ``), is not known: the call gets rule `unparseable` (§4 step 5) and the literal path is still checked, so a deny on it wins. `$PWD` is the working directory. A child shell (`sh -c`) does not see the variables, so `x=1; sh -c 'echo $x'` reads `x`, and an uppercase name's read stays: `NPM_TOKEN=x; echo $NPM_TOKEN` is still a read of `NPM_TOKEN`. A path through a variable whose value is not known is also the atom `@unknown-path <word>`, which `secret-names` holds for review when its file name is a key's, a token file's or a `.env`. Where `$IFS` or `${IFS}` stands in a word, the line is classified a second time with it read as a space and both results count, so `cat${IFS}~/.ssh/id_rsa` is a read of the key. A substituted variable used unquoted is split into words, as the shell does: where its value holds a space, tab or newline, and once more at the characters of each value the line gave `IFS` (an `IFS` set to a value the line does not show, as `read IFS` does, makes the call `unparseable`); every split counts. So `x='.env other'; cat $x` reads `.env` and `other`, `s=' '; cat${s}~/.ssh/id_rsa` is a read of the key (a `~` a split leaves at the start of a word is read as the home directory, stricter than the shell), an unquoted empty value is no word (`x=; $x env` is `env`), and a `*`, `?` or `[` in an unquoted value is a glob (`x='.e*'; cat $x`). A quoted use (`"$x"`) stays one word. A value that starts with a quoted `~` is not substituted (its path is not known). A `file:` URL in any argument (`curl file:///etc/passwd`, `--url=FILE:///…`, `%`-escapes decoded) is an `fs.read` of its path. Arguments that are a command line the program runs are classified as one: `watch 'cmd'`, `git rebase --exec`/`-x` (by any prefix git accepts), `git submodule foreach`, `git bisect run`, `git difftool --extcmd`/`-x`, `git filter-branch --*-filter`, `ssh`/`scp`/`sftp -o ProxyCommand=`/`LocalCommand`/`KnownHostsCommand`, `rsync -e`/`--rsh`, `su`/`runuser -c`/`--command`/`--session-command`, and `tar --to-command`, `-I`/`--use-compress-program`, `--checkpoint-action=exec=`, `-F`/`--info-script`/`--new-volume-script` and `--rsh-command`/`--rmt-command` (by any prefix GNU tar accepts, the value attached, after `=` or the next word). `pkexec` and `runuser -u USER` are wrappers like `sudo`. A program none of these lists names that is handed a shell with a command string among its arguments (`mywrap sh -c 'cmd'`, `poetry run bash -lc 'cmd'`) runs that string too, so the string is classified as well; this only adds atoms. `echo`, `printf` and `tr`, whose arguments are text, and `docker`, `podman`, `nerdctl`, `kubectl` and `oc`, whose command runs in the container ([LIMITS.md](LIMITS.md)), are left out.
+- A reserved word that starts a command inside a compound one (`do`, `then`, `else`, `elif`, `if`, `while`, `until`, `!`, `{`) is not the program: `for f in a; do cat x; done` is the command `cat x`, and `done`, `fi`, `}` and `esac` alone run nothing. `for NAME in WORDS` is an `env.set` of `NAME`, and the words are read like any others. A variable set by a command of its own earlier on the line (`n=3; git log -$n`, a `for` variable, `export X=v`; also `readonly`, `local`, `declare` and `typeset` without options, which may set an array, a number or a reference) is a shell variable. When every value it can hold is text the line shows (no `$`, `$( … )`, glob or quoted `~`), it is substituted where it is used and the command is classified once per value, so `d=~/.ssh; cat $d/id_rsa` and `X=~/.ssh; cat $X/id_rsa` are reads of `~/.ssh/id_rsa`. An assignment from such variables is known as well, plainly (`y=$x`) or with the shortest or longest prefix or suffix a pattern matches removed (`${x#pat}`, `${x##pat}`, `${x%pat}`, `${x%%pat}`, a pattern of plain characters, `*` and `?`): `for x in f.md:21 g.md:17; do n=${x#*:}; sed -n ${n}p ${x%%:*}; done` prints lines 21 and 17 and reads `f.md` and `g.md`. A pattern with `*` or `?` is read only when the whole expansion is unquoted: quotes inside the braces make them literal (`"${x#"*"}"`), and an empty pair (`"${x#""*""}"`) leaves no trace in the text, so a quoted one stays unknown, as do a bracket expression, a quote, a backslash or a `$` in the pattern and every other operator (`${x:-y}`, `${x/a/b}`). A command classified once per value leaves each variable it sets with every value it took, not only the last: after `for x in ~/.ssh/id_rsa README; do y=$x; cat $y; done` both are read. Reading a lowercase one is then no `env.read`; an uppercase name, by convention an environment variable, keeps its `env.read`, and so does any variable whose value is not known. A prefix assignment (`D=x cmd $D`) does not count: the shell expands `$D` before it. A quote or a backslash ends a variable's name, as in the shell: `"$d"_rsa`, `$d'_rsa'`, `$d"_rsa"` and `$d\_rsa` use `d` followed by `_rsa`, read as `${d}_rsa` (so `d=~/.ssh/id; cat "$d"_rsa` is a read of `~/.ssh/id_rsa`, and `echo "$GITHUB_TOKEN"x` reads `GITHUB_TOKEN`). A path that still contains a variable the shell expands (other than `$HOME` and `$PWD`, unless the line gave them a value it does not show, as `read HOME` or `HOME=$(cat f)` do; `${project}` is the policy's syntax, so in a command it is the shell's variable `project`, read as empty), or the output of a command (`cat $(cat list)`, `` cat `cmd` ``), is not known: the call gets rule `unparseable` (§4 step 5) and the literal path is still checked, so a deny on it wins. `$PWD` is the working directory. A child shell (`sh -c`) does not see the variables, so `x=1; sh -c 'echo $x'` reads `x`, and an uppercase name's read stays: `NPM_TOKEN=x; echo $NPM_TOKEN` is still a read of `NPM_TOKEN`. A path through a variable whose value is not known is also the atom `@unknown-path <word>`, which `secret-names` holds for review when its file name is a key's, a token file's or a `.env`. Where `$IFS` or `${IFS}` stands in a word, the line is classified a second time with it read as a space and both results count, so `cat${IFS}~/.ssh/id_rsa` is a read of the key. A substituted variable used unquoted is split into words, as the shell does: where its value holds a space, tab or newline, and once more at the characters of each value the line gave `IFS` (an `IFS` set to a value the line does not show, as `read IFS` does, makes the call `unparseable`); every split counts. So `x='.env other'; cat $x` reads `.env` and `other`, `s=' '; cat${s}~/.ssh/id_rsa` is a read of the key (a `~` a split leaves at the start of a word is read as the home directory, stricter than the shell), an unquoted empty value is no word (`x=; $x env` is `env`), and a `*`, `?` or `[` in an unquoted value is a glob (`x='.e*'; cat $x`). A quoted use (`"$x"`) stays one word. A value that starts with a quoted `~` is not substituted (its path is not known). A `file:` URL in any argument (`curl file:///etc/passwd`, `--url=FILE:///…`, `%`-escapes decoded) is an `fs.read` of its path. Arguments that are a command line the program runs are classified as one: `watch 'cmd'`, `git rebase --exec`/`-x` (by any prefix git accepts), `git submodule foreach`, `git bisect run`, `git difftool --extcmd`/`-x`, `git filter-branch --*-filter`, `ssh`/`scp`/`sftp -o ProxyCommand=`/`LocalCommand`/`KnownHostsCommand`, `rsync -e`/`--rsh`, `su`/`runuser -c`/`--command`/`--session-command`, and `tar --to-command`, `-I`/`--use-compress-program`, `--checkpoint-action=exec=`, `-F`/`--info-script`/`--new-volume-script` and `--rsh-command`/`--rmt-command` (by any prefix GNU tar accepts, the value attached, after `=` or the next word). `pkexec` and `runuser -u USER` are wrappers like `sudo`. A program none of these lists names that is handed a shell with a command string among its arguments (`mywrap sh -c 'cmd'`, `poetry run bash -lc 'cmd'`) runs that string too, so the string is classified as well; this only adds atoms. `echo`, `printf` and `tr`, whose arguments are text, and `docker`, `podman`, `nerdctl`, `kubectl` and `oc`, whose command runs in the container ([LIMITS.md](LIMITS.md)), are left out.
 - Inline code given to an interpreter on the command line is scanned for paths, hosts and variable names (not parsed): `python`/`python3 -c` (also versioned, `python3.12 -c`, `python2.7 -c`), `node -e`/`--eval`/`-p`/`--print`, `deno eval`, `bun -e`, `perl -e`/`-E`, `ruby -e`, `php -r`, `osascript -e`, `pwsh`/`powershell -c`/`-Command`, `lua`/`luajit -e` and `Rscript -e` (`shell/tables.rs`). So `python3.12 -c "open('/Users/you/.ssh/id_rsa')"` is a read of the key. The code word itself is text, not a file operand, and inside it a `~` that does not start `~/…` is an operator or a delimiter, not a login name (`~x`, `=~`, perl's `s~a~b~` and its trailing `~s`), so `perl -0pi -e 's~\A.*?~#include "x.hpp"~s' f.cpp` reads `f.cpp` and names no other user's home. A variable the code reads by a quoted or spelled-out name (`os.environ['X']`, `os.environ.get('X')`, `os.getenv('X')`, `process.env.X`, `Deno.env.get('X')`, `ENV['X']`, `ENV.fetch('X')`, `$ENV{X}`, `$_ENV['X']`, `getenv('X')`, `$env:X` in any case, `getattr(os, 'environ')['X']`, `subprocess.run(['printenv', 'X'])`, PowerShell's `[Environment]::GetEnvironmentVariable('X')` and `Get-ChildItem Env:X`) is an `env.read` of it. Code that reads the whole environment is the atom `@env-dump <expression>`, which `env-dump` denies: the environment as the only argument of a call (`print(os.environ)`, `dict(os.environ)`, `console.log(process.env)`, `JSON.stringify(process.env)`), unless that call is handed on as a child's environment (`env=dict(os.environ)`); a method that returns every variable (`.items()`, `.values()`, `ENV.to_h`, `Deno.env.toObject()`, …); `%ENV`; `getenv()` without a name; a name chosen at run time (`os.environ[k]`, `$ENV{$_}`); a printing statement (`p ENV`); the environment as the whole code (`node -p process.env`); `getattr(os, 'environ')`, `vars(os)` or `os.__dict__` used any other way; `__import__('os')` in place of `os` (`print(__import__('os').environ)`, `__import__('os').__dict__`); `env` or `printenv` without arguments run as a child (`os.popen('env')`, `subprocess.run(['env'])`, `os.system('printenv | sort')`); or PowerShell's `[Environment]::GetEnvironmentVariables()` and a listing of the `Env:` drive (`Get-ChildItem Env:`, `gci`, `ls` or `dir env:`). An alias (`e = os.environ`) is not followed. Passing the environment on (`env={**os.environ}`) or setting a variable (`os.environ['A'] = '1'`) is neither. Code (inline, or a here-document an interpreter reads) that uses a file, network, environment or process API (`open(`, `pathlib`, `readFileSync`, `require('fs')`, `File.read`, `open F`, `<F>`, `urllib`, `requests`, `socket`, `fetch(`, `os.environ`, `process.env`, `$ENV{`, `ENV[`, `subprocess`, `os.system`, `child_process`, `exec(`, `eval(`, `__import__`, …) and builds the text it hands them at run time is the atom `@opaque-code <interpreter>`, which `opaque-code` holds for review: strings joined (`"~/.s"+"sh/id_rsa"`, Perl's `.`, Lua's `..`, adjacent literals), interpolated (`f"{x}"`, `` `${x}` ``, `"$ENV{HOME}/x"`, `"#{x}"`), built or decoded (`.format(`, `join(`, `chr(`, `b64decode`, `fromCharCode`, `[::-1]`, `%s`), or a call that takes a file, address or command given something other than literal text (`open(p)`, `fetch(url)`, `subprocess.run(cmd)`, `open(my $f, '<', $ARGV[0])`). The scan cannot see what such code opens, so no deny rule could match it. Code that writes a file (`open(p, "w")` and every mode that writes, `write_text`, `write_bytes`, `Path(p).touch()`, `shutil.copy`/`move`, `os.rename`/`replace`; `writeFileSync`, `appendFileSync`, `writeFile`, `appendFile`, `createWriteStream`, `fs.promises.writeFile`, `Deno.writeTextFile`, `Bun.write`; `File.write`, `File.open(p, "w")`, `IO.write`, `FileUtils`; Perl's `open F, ">p"`, `">>p"`, `open($f, '>', p)`; `file_put_contents`, `fopen(p, "w")`; Lua's `io.open(p, "w")`; PowerShell's `Set-Content`, `Add-Content`, `Out-File`) is a write of every file name it shows as literal text (a path, or a name with an extension such as `x.py`), not only a read: the scan cannot tell which of them the write goes to, so all count, conservative. So `python3 -c 'open("/Users/me/.zshrc","a").write("x")'` is denied by `shell-rc` and a workflow written that way needs review (`runs-later`); code that only reads keeps its reads. Code that uses none of those APIs (`print(1+1)`, `console.log(2)`), or hands them only literal text (`open('pyproject.toml')`, read as a path; `json.load(sys.stdin)`), keeps its verdict. A variable name or host the scan does read is still denied (`os.environ["GITHUB_"+"TOKEN"]` by `env-dump`, `urlopen("http://e"+"vil.com")` by `default.net`).
 - Relative paths follow `cd` and `pushd` earlier in the same command line: `cd ~/.ssh && cat id_rsa` is a read of `~/.ssh/id_rsa`. Which commands run after a `cd` succeeds is not modelled (`cd x || cat y`, a failed `cd` before `;`), so a relative path is checked in every directory the line may be in (the session's directory and each `cd` target), strictest wins. A subshell `( … )` restores the directory when it closes; `$( … )` and `sh -c` start from the directory where they appear. `cd` alone is `~`. A target that cannot be known (`cd "$DIR"`, `cd -`, `cd s*`, `pushd +1`, `popd`, and `eval`/`source`, which may `cd` themselves) makes every later relative path unresolvable, so the command gets rule `unparseable` (step 5); absolute paths are still checked normally. More than 16 possible directories is `unparseable` too. `cd` itself adds no new action (a path-looking target is an `fs.read` like any argument). `CDPATH` is not consulted: the shell searches it for a target that does not start with `/`, `./` or `../`, but the classifier cannot see the environment the host started the shell with, so such a target is taken relative to the current directory. Setting `CDPATH` on the line itself (`CDPATH=~ cd .ssh`, `export CDPATH=…`) is an `env.set` that `opaque-code` holds for review, and the shell start-up files that could preset it are denied by `shell-rc`.
 - `openmoat guard` checks a path where it really points as well as where it was written: after `ln -s ~/.ssh ./s`, `cat ./s/id_rsa`, `cat s/id_rsa`, `head s/id_rsa` and `grep -r . s/` are denied by `secrets-paths`. A link inside the project that points elsewhere inside the project stays allowed; one that points outside it is checked at its target (`ln -s /etc e; cat e/hosts` is decided as a read of `/etc/hosts`, which the default policy defers), also when the project itself sits under a linked directory (§3.2). `openmoat policy check` resolves symlinks the same way. Hard links that already exist and a link swapped after the check are not seen (ADR-009). Making a hard link is a write of the file linked to, since a later write through the new name changes it: `ln` without `-s`, `link`, `cp -l` or `--link`, and the directory of `rsync --link-dest` (relative to the destination), so `ln ~/.claude/settings.json s.json` and `cp -al ~/.moat ./m` are denied by `kernel-self`.
@@ -1021,7 +1203,7 @@ A deny or review from one of OpenMoat's own checks that reaches the agent (`unpa
 `unchecked`, `executables`, `kernel-integrity`, `kernel-error`, `mcp-server-changed`,
 `ungoverned`, `project-settings`, `session-taint`, `injected-input`, `mcp-cross-server`,
 `protected-contents`, `session-written-code`, `push-secret`, `push-runs-later`,
-`push-unchecked`, `protection-required`, `unattended`) carries the block message as a titled rule does (§2), with OpenMoat's
+`push-unchecked`, `protection-required`, `unattended`, `request-rule`) carries the block message as a titled rule does (§2), with OpenMoat's
 own title and `why` (ADR-059, amended); a rule of your policy with one of these ids keeps
 your words. `default.<kind>` and the ids of `openmoat mcp proxy`, `openmoat proxy` and
 `policy check-diff` keep their own output.
@@ -1049,6 +1231,7 @@ your words. `default.<kind>` and the ids of `openmoat mcp proxy`, `openmoat prox
 | `protected-contents` | review | the call reads a folder that holds paths a deny rule names (`cp -r ~/.codex x`, `grep -r . ~/.gemini`, `ls ~/.codex`), or writes into one (`tar xf a.tar -C ~/.config`): the folder rule (§3.2, ADR-038) |
 | `session-written-code` | review | the call runs a file the same host session wrote (`python3 x.py`, `bash x.sh`, `./x`) and no OS sandbox from OpenMoat holds it (§4.3, ADR-039) |
 | `unattended` | review | the policy says `unattended: review`, the call would be a `defer`, and the agent runs in a mode in which it runs such a call with no person asked (§5.4, ADR-102); the agent receives it as a deny that says how to approve it |
+| `request-rule` | deny, review | a request to a `requests:` host its rules refuse, read in a shell command or a fetch tool's URL (deny), or one the hook cannot read in full (a URL, host or method made at run time, options from a file) where a rule could refuse it (review); at `openmoat proxy`, a request refused inside a terminated tunnel or as plain HTTP, and a connection to such a host it cannot terminate under `requests_untrusted: refuse` (deny) (§2.3, ADR-062) |
 | `push-secret` | deny | a commit a `git push` or `gh pr create` would publish adds a known token format or a brokered secret's value (§4.2) |
 | `push-runs-later` | review | the session read untrusted content or a secret, and the push changes a file `runs-later` names (§4.2) |
 | `push-unchecked` | review | what a push would publish could not be checked within 10 s or 8 MiB, or where it runs is not known (§4.2) |
@@ -1088,7 +1271,9 @@ first. Differences from the hook:
   too when the hook should allow it.
 - A `fetch` allow opens the host to every method through the proxy, including requests with a
   body. Inside a CONNECT tunnel the method cannot be seen, except to a host whose
-  brokered secret says `tls: terminate` (§2.1).
+  brokered secret says `tls: terminate` (§2.1) or whose `requests:` entry the proxy holds,
+  for a session that trusts the proxy CA (§2.3); there each request is checked against the
+  host's request rules.
 - Loopback, link-local, cloud metadata (`metadata.google.internal`, `metadata.goog`,
   `100.100.100.200`, `fd00:ec2::254`) and non-unicast destinations are refused whatever the
   policy allows. This applies to the name as written and to every address it resolves to.
@@ -2009,10 +2194,13 @@ review:
     fs.write: ["${project}/db/migrations/**"]
 ```
 
-- Only `version`, `deny`, `review` (or its old name `ask`), `allow` and `require` are accepted. `defaults`, `executables` and
-  `sandbox` stay yours, and any other key is an error. Rules follow §1–§3.
+- Only `version`, `deny`, `review` (or its old name `ask`), `allow`, `require` and `requests` are accepted. `defaults`, `executables`,
+  `sandbox` and `requests_untrusted` stay yours, and any other key is an error. Rules follow §1–§3.
 - `require` raises the protection level an agent must be at in the project (§9.2), never
   lowers it, and needs no trust.
+- `requests` entries (§2.3) may list `deny` rules only, which join yours under `repo:` ids
+  and need no trust; an `allow` list is an error. Under `openmoat run` the proxy holds
+  those without `hook_only` too.
 - `deny` groups join your deny rules. `review` groups are tried after your deny rules and
   before your allow rules. So they make an action your policy allows need review, but they
   never soften one of your denies, a `deny` your `defaults` give included: a repository
@@ -2083,7 +2271,7 @@ every call in the project is denied.
 ## 11. Signed policy packs
 
 A policy pack is a team's rules that you install for every project (ADR-031). It has a
-repository policy's shape (only `version`, `deny`, `review`, `allow` and `require`, §10; its
+repository policy's shape (only `version`, `deny`, `review`, `allow`, `require` and `requests` deny lists, §10; its
 `require` raises the protection level as a repository's does, §9.2) and a
 detached OpenSSH signature. OpenMoat has no signature code of its own: it runs the
 system `ssh-keygen` (OpenSSH 8.1 or later), found through the environment snapshot
@@ -2120,7 +2308,10 @@ openmoat policy remove team
   `pack:<name>:` (`pack:team:no-deploy`): its deny rules join yours, its review rules are
   tried before your allow rules, and its allow rules are added after yours, so your
   deny rules still win. Deny and allow rules also reach the host sandboxes at the next
-  `openmoat sandbox sync`; review rules are hook only.
+  `openmoat sandbox sync`; review rules are hook only. Its `requests:` entries (deny lists
+  only, §2.3) join yours. `crates/openmoat-core/policies/packs/exfil-endpoints.yaml` is
+  such a pack: it lists the default policy's gist rules, which the proxy holds too where
+  your own policy has it hold api.github.com (§2.3); whoever distributes it signs it.
 - The allowed signers, `packs.json` and each installed pack are pinned by the lock
   (§8). A pack changed after install is drift, and every call is denied with
   `kernel-integrity`. Only these three commands add those pins; another re-pin keeps

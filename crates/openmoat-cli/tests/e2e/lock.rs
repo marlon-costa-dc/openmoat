@@ -4,17 +4,19 @@ use std::path::PathBuf;
 
 use serde_json::Value;
 
-use crate::common::{DENY, OK, Sandbox, USAGE, fixture, hook_output, text};
+use crate::common::{DENY, OK, Sandbox, USAGE, hook_output, host_fixture, text};
+use crate::hosts::{dir_of, hook_file, hook_file_name};
+use openmoat_hosts::Host;
 
 mod binary;
 
 fn sandbox() -> Sandbox {
-    Sandbox::installed(&[".claude"])
+    Sandbox::installed(&[&dir_of(Host::ClaudeCode)])
 }
 
 /// `guard` on the golden `Read src/lib.rs` payload, with the exit code folded in.
 fn guard_read_src(sb: &Sandbox) -> Value {
-    let out = sb.guard("claude-code", &fixture("claude-code/read.json"));
+    let out = sb.guard_fixture(Host::ClaudeCode, "read.json");
     let mut d = hook_output(&out);
     d["exit"] = Value::from(out.status.code().unwrap_or(-1));
     d
@@ -29,7 +31,7 @@ fn lock_path(sb: &Sandbox) -> PathBuf {
 }
 
 fn settings_path(sb: &Sandbox) -> PathBuf {
-    sb.home.join(".claude/settings.json")
+    hook_file(sb, Host::ClaudeCode)
 }
 
 #[test]
@@ -61,7 +63,11 @@ fn init_writes_a_lock_covering_policy_and_hooks() {
             "{name} not pinned: {entries:?}"
         );
     }
-    assert!(entries.keys().any(|k| k.ends_with("settings.json")));
+    assert!(
+        entries
+            .keys()
+            .any(|k| k.ends_with(hook_file_name(Host::ClaudeCode)))
+    );
 }
 
 // coverage: ASI10
@@ -141,19 +147,26 @@ fn directory_of_a_pinned_file_swapped_for_a_symlink_is_denied() {
     let sb = sandbox();
     assert_eq!(guard_read_src(&sb)["permissionDecision"], "allow");
 
-    let claude = sb.home.join(".claude");
+    let claude = sb.home.join(dir_of(Host::ClaudeCode));
     let moved = sb.home.join("claude-original");
     std::fs::rename(&claude, &moved).unwrap();
     let copy = sb.home.join("attacker-claude");
     std::fs::create_dir(&copy).unwrap();
-    std::fs::copy(moved.join("settings.json"), copy.join("settings.json")).unwrap();
+    std::fs::copy(
+        moved.join(hook_file_name(Host::ClaudeCode)),
+        copy.join(hook_file_name(Host::ClaudeCode)),
+    )
+    .unwrap();
     std::os::unix::fs::symlink(&copy, &claude).unwrap();
 
     let d = guard_read_src(&sb);
     assert_eq!(d["permissionDecision"], "deny", "{d}");
     let reason = d["permissionDecisionReason"].as_str().unwrap();
     assert!(reason.contains("kernel-integrity"), "{reason}");
-    assert!(reason.contains("settings.json"), "{reason}");
+    assert!(
+        reason.contains(hook_file_name(Host::ClaudeCode)),
+        "{reason}"
+    );
 }
 
 #[test]
@@ -207,10 +220,14 @@ fn doctor_reports_health_drift_and_refuses_to_accept_outside_a_terminal() {
         "still denied after the refused accept"
     );
 
-    std::fs::remove_file(sb.home.join(".claude/settings.json")).unwrap();
+    std::fs::remove_file(hook_file(&sb, Host::ClaudeCode)).unwrap();
     let out = sb.moat(&["doctor"]);
     assert_eq!(out.status.code(), Some(USAGE));
-    assert!(text(&out).contains("settings.json"), "{}", text(&out));
+    assert!(
+        text(&out).contains(hook_file_name(Host::ClaudeCode)),
+        "{}",
+        text(&out)
+    );
 }
 
 #[test]
@@ -238,14 +255,17 @@ fn doctor_and_accept_name_the_keys_that_changed() {
 #[test]
 fn ungoverned_tool_is_denied_while_the_lock_shows_drift() {
     let sb = sandbox();
-    let ungoverned = fixture("claude-code/skill.json");
-    assert_eq!(sb.guard("claude-code", &ungoverned).status.code(), Some(OK));
+    let ungoverned = host_fixture(Host::ClaudeCode, "skill.json");
+    assert_eq!(
+        sb.guard(Host::ClaudeCode.id(), &ungoverned).status.code(),
+        Some(OK)
+    );
 
     let mut policy = std::fs::read_to_string(policy_path(&sb)).unwrap();
     policy.push_str("\n# tampered by an agent\n");
     std::fs::write(policy_path(&sb), policy).unwrap();
 
-    let out = sb.guard("claude-code", &ungoverned);
+    let out = sb.guard(Host::ClaudeCode.id(), &ungoverned);
     assert_eq!(out.status.code(), Some(DENY));
     let reason = hook_output(&out)["permissionDecisionReason"].to_string();
     assert!(reason.contains("kernel-integrity"), "{reason}");
@@ -285,7 +305,7 @@ fn planted_binary_earlier_on_the_search_path_is_denied() {
     use std::path::Path;
 
     use crate::common::output;
-    let sb = Sandbox::bare(&[".claude"]);
+    let sb = Sandbox::bare(&[&dir_of(Host::ClaudeCode)]);
     let dir = tempfile::tempdir().unwrap();
     let home = sb.home.clone();
     let early = dir.path().join("early-bin");
@@ -313,12 +333,12 @@ fn planted_binary_earlier_on_the_search_path_is_denied() {
     .to_string();
     let decision = |out| hook_output(&out);
     assert_eq!(
-        decision(run(&["guard", "--host", "claude-code"], &payload))["permissionDecision"],
+        decision(run(&["guard", "--host", Host::ClaudeCode.id()], &payload))["permissionDecision"],
         "allow"
     );
 
     script(&early.join("git"));
-    let d = decision(run(&["guard", "--host", "claude-code"], &payload));
+    let d = decision(run(&["guard", "--host", Host::ClaudeCode.id()], &payload));
     assert_eq!(d["permissionDecision"], "deny");
     let reason = d["permissionDecisionReason"].as_str().unwrap();
     assert!(reason.contains("executables"), "{reason}");
@@ -362,7 +382,11 @@ fn repin_from_another_config_dir_keeps_the_pinned_hook_file() {
     std::fs::create_dir_all(&shell).unwrap();
     assert_eq!(run(&agent, &["init", "--yes"]).status.code(), Some(OK));
     // The other shell's directory holds an OpenMoat hook the lock never pinned.
-    std::fs::copy(agent.join("settings.json"), shell.join("settings.json")).unwrap();
+    std::fs::copy(
+        agent.join(hook_file_name(Host::ClaudeCode)),
+        shell.join(hook_file_name(Host::ClaudeCode)),
+    )
+    .unwrap();
 
     let mut policy = std::fs::read_to_string(policy_path(&sb)).unwrap();
     policy.push_str("\n# edited by the owner\n");
@@ -383,7 +407,13 @@ fn repin_from_another_config_dir_keeps_the_pinned_hook_file() {
         report.contains("CLAUDE_CONFIG_DIR is") && report.contains("which OpenMoat uses"),
         "{report}"
     );
-    assert!(report.contains("Claude Code hook installed"), "{report}");
+    assert!(
+        report.contains(&format!(
+            "{} hook installed",
+            Host::ClaudeCode.display_name()
+        )),
+        "{report}"
+    );
     assert!(!report.contains("not pinned"), "{report}");
 
     let out = run(&shell, &["allow", "npm install left-pad", "--always"]);
@@ -402,9 +432,9 @@ fn repin_from_another_config_dir_keeps_the_pinned_hook_file() {
         assert!(!text(&out).contains("not pinned"), "{}", text(&out));
     }
 
-    let settings = std::fs::read_to_string(agent.join("settings.json")).unwrap();
+    let settings = std::fs::read_to_string(agent.join(hook_file_name(Host::ClaudeCode))).unwrap();
     let settings = settings.replacen('{', r#"{"apiKeyHelper":"x","#, 1);
-    std::fs::write(agent.join("settings.json"), settings).unwrap();
+    std::fs::write(agent.join(hook_file_name(Host::ClaudeCode)), settings).unwrap();
     let d = guard_read_src(&sb);
     assert_eq!(d["permissionDecision"], "deny", "{d}");
     let reason = d["permissionDecisionReason"].as_str().unwrap();

@@ -3,7 +3,9 @@
 
 use serde_json::Value;
 
-use crate::common::{Sandbox, fixture, hook_output as decision, stderr, stdout};
+use crate::common::{Sandbox, hook_output as decision, host_fixture, stderr, stdout};
+use crate::hosts::{dir_of, hook_file};
+use openmoat_hosts::Host;
 
 mod claude_code_hook;
 mod state_dir;
@@ -11,13 +13,13 @@ mod tools;
 
 /// The parsed `~/.claude/settings.json`.
 fn settings(sb: &Sandbox) -> Value {
-    let text = std::fs::read_to_string(sb.home.join(".claude/settings.json")).unwrap();
+    let text = std::fs::read_to_string(hook_file(sb, Host::ClaudeCode)).unwrap();
     serde_json::from_str(&text).unwrap()
 }
 
 #[test]
 fn init_creates_state_and_installs_claude_code_hook() {
-    let sb = Sandbox::bare(&[".claude"]);
+    let sb = Sandbox::bare(&[&dir_of(Host::ClaudeCode)]);
     let out = sb.moat(&["init", "--yes"]);
     assert_eq!(out.status.code(), Some(0), "{}", stderr(&out));
     // The hook's events and command only with --verbose.
@@ -34,7 +36,13 @@ fn init_creates_state_and_installs_claude_code_hook() {
     assert_eq!(hooks.as_array().unwrap().len(), 1);
     assert_eq!(
         hooks[0]["hooks"][0]["args"],
-        serde_json::json!(["guard", "--host", "claude-code", "--home", sb.home_word()])
+        serde_json::json!([
+            "guard",
+            "--host",
+            Host::ClaudeCode.id(),
+            "--home",
+            sb.home_word()
+        ])
     );
     assert_eq!(hooks[0]["hooks"][0]["onFailure"], "block");
     assert!(
@@ -67,26 +75,32 @@ fn init_creates_state_and_installs_claude_code_hook() {
     let status = sb.moat(&["status"]);
     assert_eq!(status.status.code(), Some(0), "{}", stdout(&status));
     let shown = crate::common::squash(&stdout(&status));
-    assert!(shown.contains(" Claude Code hook"), "{shown}");
-    assert!(!shown.contains("✗ Claude Code"), "{shown}");
+    assert!(
+        shown.contains(&format!(" {} hook", Host::ClaudeCode.display_name())),
+        "{shown}"
+    );
+    assert!(
+        !shown.contains(&format!("✗ {}", Host::ClaudeCode.display_name())),
+        "{shown}"
+    );
 }
 
 #[test]
 fn init_dry_run_touches_nothing() {
-    let sb = Sandbox::bare(&[".claude"]);
+    let sb = Sandbox::bare(&[&dir_of(Host::ClaudeCode)]);
     let out = sb.moat(&["init", "--dry-run"]);
     assert_eq!(out.status.code(), Some(0));
     assert!(stdout(&out).contains("would"));
     assert!(!sb.home.join(".moat").exists());
-    assert!(!sb.home.join(".claude/settings.json").exists());
+    assert!(!hook_file(&sb, Host::ClaudeCode).exists());
 }
 
 #[test]
 fn guard_denies_secret_exfiltration_and_records_it() {
-    let sb = Sandbox::bare(&[".claude"]);
+    let sb = Sandbox::bare(&[&dir_of(Host::ClaudeCode)]);
     sb.moat(&["init", "--yes"]);
 
-    let out = sb.guard("claude-code", &fixture("claude-code/bash.json"));
+    let out = sb.guard_fixture(Host::ClaudeCode, "bash.json");
     assert_eq!(out.status.code(), Some(2));
     let d = decision(&out);
     assert_eq!(d["hookEventName"], "PreToolUse");
@@ -126,7 +140,7 @@ fn guard_denies_secret_exfiltration_and_records_it() {
 
 #[test]
 fn guard_allows_ordinary_work_and_defers_installs() {
-    let sb = Sandbox::bare(&[".claude"]);
+    let sb = Sandbox::bare(&[&dir_of(Host::ClaudeCode)]);
     sb.moat(&["init", "--yes"]);
     let project = sb.home.join("proj");
     std::fs::create_dir_all(project.join(".git")).unwrap();
@@ -145,7 +159,7 @@ fn guard_allows_ordinary_work_and_defers_installs() {
         // ADR-025: no rule matches an install; the agent's own prompt decides
         ("npm install left-pad-pro", "defer", ""),
     ] {
-        let out = sb.guard("claude-code", &payload(command));
+        let out = sb.guard(Host::ClaudeCode.id(), &payload(command));
         assert_eq!(out.status.code(), Some(0), "{command}: {}", stderr(&out));
         let d = decision(&out);
         assert_eq!(d["permissionDecision"], verdict, "{command}");
@@ -159,7 +173,7 @@ fn guard_allows_ordinary_work_and_defers_installs() {
         "session_id": "s-allow", "cwd": cwd, "tool_name": "Write",
         "tool_input": {"file_path": project.join("src/main.rs").to_string_lossy(), "content": "fn main(){}"}
     });
-    let out = sb.guard("claude-code", &edit.to_string());
+    let out = sb.guard(Host::ClaudeCode.id(), &edit.to_string());
     let d = decision(&out);
     assert_eq!(d["permissionDecision"], "allow", "{}", stderr(&out));
     assert!(
@@ -195,9 +209,9 @@ fn guard_allows_ordinary_work_and_defers_installs() {
 /// approved past its own prompt, and recorded.
 #[test]
 fn guard_leaves_ungoverned_tools_to_the_host() {
-    let sb = Sandbox::bare(&[".claude"]);
+    let sb = Sandbox::bare(&[&dir_of(Host::ClaudeCode)]);
     sb.moat(&["init", "--yes"]);
-    let out = sb.guard("claude-code", &fixture("claude-code/skill.json"));
+    let out = sb.guard_fixture(Host::ClaudeCode, "skill.json");
     assert_eq!(out.status.code(), Some(0));
     assert!(out.stdout.is_empty(), "{}", stderr(&out));
     let shown = sb.moat(&["show", "--recent", "1"]);
@@ -210,7 +224,7 @@ fn guard_leaves_ungoverned_tools_to_the_host() {
 
 #[test]
 fn claude_code_command_tools_are_hooked_and_governed() {
-    let sb = Sandbox::bare(&[".claude"]);
+    let sb = Sandbox::bare(&[&dir_of(Host::ClaudeCode)]);
     sb.moat(&["init", "--yes"]);
     let matcher = settings(&sb)["hooks"]["PreToolUse"][0]["matcher"]
         .as_str()
@@ -221,7 +235,7 @@ fn claude_code_command_tools_are_hooked_and_governed() {
     }
 
     for name in ["monitor", "sendfile"] {
-        let out = sb.guard("claude-code", &fixture(&format!("claude-code/{name}.json")));
+        let out = sb.guard_fixture(Host::ClaudeCode, &format!("{name}.json"));
         assert_eq!(out.status.code(), Some(2), "{name}");
         let d = decision(&out);
         assert_eq!(d["permissionDecision"], "deny", "{name}");
@@ -229,7 +243,7 @@ fn claude_code_command_tools_are_hooked_and_governed() {
         assert!(reason.contains("secrets-paths"), "{name}: {reason}");
     }
 
-    let ps = sb.guard("claude-code", &fixture("claude-code/powershell.json"));
+    let ps = sb.guard_fixture(Host::ClaudeCode, "powershell.json");
     assert_eq!(ps.status.code(), Some(0));
     let d = decision(&ps);
     assert_eq!(d["permissionDecision"], "defer");
@@ -240,9 +254,9 @@ fn claude_code_command_tools_are_hooked_and_governed() {
 
 #[test]
 fn guard_fails_closed() {
-    let sb = Sandbox::bare(&[".claude"]);
+    let sb = Sandbox::bare(&[&dir_of(Host::ClaudeCode)]);
 
-    let out = sb.guard("claude-code", &fixture("claude-code/read.json"));
+    let out = sb.guard_fixture(Host::ClaudeCode, "read.json");
     assert_eq!(out.status.code(), Some(2), "no policy installed must deny");
     assert_eq!(decision(&out)["permissionDecision"], "deny");
     assert!(
@@ -254,7 +268,7 @@ fn guard_fails_closed() {
 
     sb.moat(&["init", "--yes"]);
     for payload in ["", "not json", r#"{"tool_name":"Bash","tool_input":{}}"#] {
-        let out = sb.guard("claude-code", payload);
+        let out = sb.guard(Host::ClaudeCode.id(), payload);
         assert_eq!(out.status.code(), Some(2), "payload {payload:?} must deny");
         assert_eq!(decision(&out)["permissionDecision"], "deny");
         assert_eq!(
@@ -271,10 +285,10 @@ fn guard_fails_closed() {
 /// run the call. Debug builds panic where `MOAT_TEST_PANIC_AT` says.
 #[test]
 fn a_panic_while_deciding_denies() {
-    let sb = Sandbox::bare(&[".claude"]);
+    let sb = Sandbox::bare(&[&dir_of(Host::ClaudeCode)]);
     let panicking = |payload: &str| {
         let mut cmd = sb.command();
-        cmd.args(["guard", "--host", "claude-code"])
+        cmd.args(["guard", "--host", Host::ClaudeCode.id()])
             .env("MOAT_TEST_PANIC_AT", "evaluate");
         let out = crate::common::output(&mut cmd, Some(payload));
         assert_eq!(out.status.code(), Some(2), "{}", stderr(&out));
@@ -286,7 +300,7 @@ fn a_panic_while_deciding_denies() {
         out
     };
     for tool in ["read.json", "bash.json"] {
-        let out = panicking(&fixture(&format!("claude-code/{tool}")));
+        let out = panicking(&host_fixture(Host::ClaudeCode, tool));
         let answer = decision(&out);
         assert_eq!(answer["permissionDecision"], "deny", "{answer}");
         let reason = answer["permissionDecisionReason"].as_str().unwrap();
@@ -294,7 +308,7 @@ fn a_panic_while_deciding_denies() {
         assert!(reason.contains("internal error while deciding"), "{reason}");
     }
     // A settings change is blocked in its own event's format, not a tool call's.
-    let out = panicking(&fixture("claude-code/config-change.json"));
+    let out = panicking(&host_fixture(Host::ClaudeCode, "config-change.json"));
     let answer: Value = serde_json::from_str(stdout(&out).trim()).unwrap();
     assert_eq!(answer["decision"], "block", "{answer}");
     assert!(
@@ -308,13 +322,13 @@ fn a_panic_while_deciding_denies() {
 /// deny rather than fail open with the usage code (ADR-015).
 #[test]
 fn unparseable_guard_arguments_deny() {
-    let sb = Sandbox::bare(&[".claude"]);
+    let sb = Sandbox::bare(&[&dir_of(Host::ClaudeCode)]);
     sb.moat(&["init", "--yes"]);
     for args in [
         &["guard", "--host", "windsurf"][..],
         &["guard"],
-        &["guard", "--hots", "claude-code"],
-        &["guard", "--host", "claude-code", "extra"],
+        &["guard", "--hots", Host::ClaudeCode.id()],
+        &["guard", "--host", Host::ClaudeCode.id(), "extra"],
     ] {
         let out = sb.moat_stdin(args, "{}");
         assert_eq!(out.status.code(), Some(2), "{args:?}: {}", stderr(&out));
@@ -332,7 +346,7 @@ fn unparseable_guard_arguments_deny() {
 
 #[test]
 fn malformed_payloads_name_their_cause_once() {
-    let sb = Sandbox::installed(&[".claude"]);
+    let sb = Sandbox::installed(&[&dir_of(Host::ClaudeCode)]);
     for (payload, problem, cause) in [
         ("nope", "payload is not valid JSON", "expected ident"),
         (
@@ -341,7 +355,7 @@ fn malformed_payloads_name_their_cause_once() {
             "invalid type",
         ),
     ] {
-        let out = sb.guard("claude-code", payload);
+        let out = sb.guard(Host::ClaudeCode.id(), payload);
         assert_eq!(out.status.code(), Some(2), "payload {payload:?} must deny");
         let reason = decision(&out)["permissionDecisionReason"].to_string();
         assert!(reason.contains(problem), "{reason}");
@@ -351,10 +365,10 @@ fn malformed_payloads_name_their_cause_once() {
 
 #[test]
 fn deleted_audit_log_denies_instead_of_recreating_it() {
-    let sb = Sandbox::bare(&[".claude"]);
+    let sb = Sandbox::bare(&[&dir_of(Host::ClaudeCode)]);
     sb.moat(&["init", "--yes"]);
     let audit = sb.home.join(".moat/audit.db");
-    let before = sb.guard("claude-code", &fixture("claude-code/bash.json"));
+    let before = sb.guard_fixture(Host::ClaudeCode, "bash.json");
     assert!(
         !stderr(&before).contains("audit log unavailable"),
         "{}",
@@ -362,7 +376,7 @@ fn deleted_audit_log_denies_instead_of_recreating_it() {
     );
 
     std::fs::remove_file(&audit).unwrap();
-    let out = sb.guard("claude-code", &fixture("claude-code/bash.json"));
+    let out = sb.guard_fixture(Host::ClaudeCode, "bash.json");
     assert_eq!(out.status.code(), Some(2));
     assert_eq!(decision(&out)["permissionDecision"], "deny");
     let reason = decision(&out)["permissionDecisionReason"].to_string();
@@ -375,12 +389,12 @@ fn deleted_audit_log_denies_instead_of_recreating_it() {
 #[test]
 fn unwritable_audit_log_denies() {
     use std::os::unix::fs::PermissionsExt as _;
-    let sb = Sandbox::bare(&[".claude"]);
+    let sb = Sandbox::bare(&[&dir_of(Host::ClaudeCode)]);
     sb.moat(&["init", "--yes"]);
     let audit = sb.home.join(".moat/audit.db");
     std::fs::set_permissions(&audit, std::fs::Permissions::from_mode(0o000)).unwrap();
 
-    let out = sb.guard("claude-code", &fixture("claude-code/bash.json"));
+    let out = sb.guard_fixture(Host::ClaudeCode, "bash.json");
     std::fs::set_permissions(&audit, std::fs::Permissions::from_mode(0o600)).unwrap();
     assert_eq!(out.status.code(), Some(2));
     assert_eq!(decision(&out)["permissionDecision"], "deny");
@@ -395,7 +409,7 @@ fn unwritable_audit_log_denies() {
 #[cfg(unix)]
 #[test]
 fn reads_and_writes_through_symlinks_are_checked_at_the_target() {
-    let sb = Sandbox::bare(&[".claude"]);
+    let sb = Sandbox::bare(&[&dir_of(Host::ClaudeCode)]);
     sb.moat(&["init", "--yes"]);
     let project = sb.home.join("proj");
     std::fs::create_dir_all(project.join(".git")).unwrap();
@@ -412,7 +426,7 @@ fn reads_and_writes_through_symlinks_are_checked_at_the_target() {
     };
 
     for command in ["cat ./s/id_rsa", "echo k >> s/authorized_keys"] {
-        let out = sb.guard("claude-code", &bash(command));
+        let out = sb.guard(Host::ClaudeCode.id(), &bash(command));
         assert_eq!(out.status.code(), Some(2), "{command}: {}", stderr(&out));
         let reason = decision(&out)["permissionDecisionReason"].to_string();
         assert!(reason.contains("secrets-paths"), "{command}: {reason}");
@@ -422,10 +436,10 @@ fn reads_and_writes_through_symlinks_are_checked_at_the_target() {
         "session_id": "s-link", "cwd": cwd, "tool_name": "Read",
         "tool_input": {"file_path": project.join("s/id_rsa").to_string_lossy()}
     });
-    let out = sb.guard("claude-code", &read.to_string());
+    let out = sb.guard(Host::ClaudeCode.id(), &read.to_string());
     assert_eq!(decision(&out)["permissionDecision"], "deny");
 
-    let out = sb.guard("claude-code", &bash("cat ./src/main.rs"));
+    let out = sb.guard(Host::ClaudeCode.id(), &bash("cat ./src/main.rs"));
     assert_eq!(
         decision(&out)["permissionDecision"],
         "allow",
@@ -439,7 +453,7 @@ fn reads_and_writes_through_symlinks_are_checked_at_the_target() {
 #[cfg(windows)]
 #[test]
 fn windows_drive_letter_payloads_are_canonical() {
-    let sb = Sandbox::bare(&[".claude"]);
+    let sb = Sandbox::bare(&[&dir_of(Host::ClaudeCode)]);
     sb.moat(&["init", "--yes"]);
     let project = sb.home.join("proj");
     std::fs::create_dir_all(project.join(".git")).unwrap();
@@ -457,7 +471,7 @@ fn windows_drive_letter_payloads_are_canonical() {
         "Write",
         serde_json::json!({"file_path": format!("{cwd}/src/main.rs"), "content": "x"}),
     );
-    let out = sb.guard("claude-code", &write);
+    let out = sb.guard(Host::ClaudeCode.id(), &write);
     assert_eq!(
         decision(&out)["permissionDecision"],
         "allow",
@@ -467,7 +481,7 @@ fn windows_drive_letter_payloads_are_canonical() {
 
     let key = format!("{}/.ssh/id_rsa", slash(&sb.home));
     let out = sb.guard(
-        "claude-code",
+        Host::ClaudeCode.id(),
         &tool("Read", serde_json::json!({"file_path": key})),
     );
     assert_eq!(out.status.code(), Some(2), "{}", stderr(&out));
@@ -477,25 +491,29 @@ fn windows_drive_letter_payloads_are_canonical() {
 
 #[test]
 fn codex_payloads_use_the_same_contract() {
-    let sb = Sandbox::bare(&[".claude"]);
-    std::fs::create_dir_all(sb.home.join(".codex")).unwrap();
+    let sb = Sandbox::bare(&[&dir_of(Host::ClaudeCode)]);
+    std::fs::create_dir_all(sb.home.join(dir_of(Host::Codex))).unwrap();
     let out = sb.moat(&["init", "--yes"]);
-    assert!(stdout(&out).contains("Codex"), "{}", stdout(&out));
-    assert!(sb.home.join(".codex/hooks.json").is_file());
+    assert!(
+        stdout(&out).contains(Host::Codex.display_name()),
+        "{}",
+        stdout(&out)
+    );
+    assert!(hook_file(&sb, Host::Codex).is_file());
 
-    let hooks = std::fs::read_to_string(sb.home.join(".codex/hooks.json")).unwrap();
+    let hooks = std::fs::read_to_string(hook_file(&sb, Host::Codex)).unwrap();
     assert!(
         hooks.contains("Bash|apply_patch|read_mcp_resource|view_image|mcp__.*"),
         "{hooks}"
     );
 
     for (payload, rule) in [
-        ("codex/pretooluse-shell.json", "env-poison"),
-        ("codex/pretooluse-apply-patch.json", "shell-rc"),
-        ("codex/pretooluse-patch-indented.json", "secrets-paths"),
-        ("codex/pretooluse-mcp.json", "secrets-paths"),
+        ("pretooluse-shell.json", "env-poison"),
+        ("pretooluse-apply-patch.json", "shell-rc"),
+        ("pretooluse-patch-indented.json", "secrets-paths"),
+        ("pretooluse-mcp.json", "secrets-paths"),
     ] {
-        let out = sb.guard("codex", &fixture(payload));
+        let out = sb.guard_fixture(Host::Codex, payload);
         assert_eq!(out.status.code(), Some(2), "{payload}: {}", stderr(&out));
         let reason = decision(&out)["permissionDecisionReason"].to_string();
         assert!(reason.contains(rule), "{payload}: {reason}");
@@ -504,7 +522,7 @@ fn codex_payloads_use_the_same_contract() {
 
 #[test]
 fn status_reports_missing_installation() {
-    let sb = Sandbox::bare(&[".claude"]);
+    let sb = Sandbox::bare(&[&dir_of(Host::ClaudeCode)]);
     let out = sb.moat(&["status"]);
     assert_eq!(out.status.code(), Some(64));
     assert!(stdout(&out).contains("run `openmoat init`"));
@@ -515,7 +533,7 @@ fn status_reports_missing_installation() {
 /// says why and what to do, not as malformed JSON.
 #[test]
 fn a_tool_call_over_the_payload_limit_is_refused_with_its_own_message() {
-    let sb = Sandbox::bare(&[".claude"]);
+    let sb = Sandbox::bare(&[&dir_of(Host::ClaudeCode)]);
     sb.moat(&["init", "--yes"]);
     let payload = serde_json::json!({
         "session_id": "s",
@@ -526,7 +544,7 @@ fn a_tool_call_over_the_payload_limit_is_refused_with_its_own_message() {
         "tool_use_id": "t",
     })
     .to_string();
-    let out = sb.guard("claude-code", &payload);
+    let out = sb.guard(Host::ClaudeCode.id(), &payload);
     assert_eq!(out.status.code(), Some(2), "{}", stderr(&out));
     let shown = format!("{}{}", stdout(&out), stderr(&out));
     assert!(shown.contains("larger than 1 MiB"), "{shown}");

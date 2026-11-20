@@ -8,6 +8,8 @@
 use std::time::Duration;
 
 use crate::common::{DENY, OK, Sandbox, json, text};
+use crate::hosts::dir_of;
+use openmoat_hosts::Host;
 
 /// Exit code of `openmoat policy check` for one action against the installed
 /// policy: 0 allow, 2 deny, 3 review.
@@ -25,7 +27,7 @@ fn wait_past_one_second() {
 
 #[test]
 fn a_site_allowed_for_a_while_ends_and_the_call_is_back_to_its_decision() {
-    let sb = Sandbox::installed_with_review(&[".claude"]);
+    let sb = Sandbox::installed_with_review(&[&dir_of(Host::ClaudeCode)]);
     assert_eq!(
         check(&sb, "net", "docs.rs"),
         Some(DENY),
@@ -104,7 +106,7 @@ fn a_site_allowed_for_a_while_ends_and_the_call_is_back_to_its_decision() {
 
 #[test]
 fn a_directory_and_a_command_allowed_for_a_while_end_too() {
-    let sb = Sandbox::installed_with_review(&[".claude"]);
+    let sb = Sandbox::installed_with_review(&[&dir_of(Host::ClaudeCode)]);
     let shared = sb.home.join("work/shared");
     std::fs::create_dir_all(&shared).unwrap();
     let notes = shared.join("notes.md").to_str().unwrap().to_owned();
@@ -140,7 +142,7 @@ fn a_directory_and_a_command_allowed_for_a_while_end_too() {
 
 #[test]
 fn an_end_that_cannot_be_read_counts_as_ended() {
-    let sb = Sandbox::installed_with_review(&[".claude"]);
+    let sb = Sandbox::installed_with_review(&[&dir_of(Host::ClaudeCode)]);
     let overlay = sb.home.join(".moat/policy.d/approved.yaml");
     std::fs::write(
         &overlay,
@@ -163,14 +165,14 @@ fn an_end_that_cannot_be_read_counts_as_ended() {
 
 #[test]
 fn for_is_refused_where_it_cannot_apply() {
-    let sb = Sandbox::installed_with_review(&[".claude"]);
+    let sb = Sandbox::installed_with_review(&[&dir_of(Host::ClaudeCode)]);
     for (args, says) in [
         (
             vec![
                 "allow",
                 "make",
                 "--host",
-                "claude-code",
+                Host::ClaudeCode.id(),
                 "--session",
                 "s1",
                 "--for",

@@ -41,6 +41,7 @@ mod policy;
 mod programs;
 mod realpath;
 mod repo;
+mod requests;
 mod route;
 pub mod rule_id;
 mod secret;
@@ -72,13 +73,17 @@ pub use patch::{Replayed as PatchReplayed, replay as patch_replay, writes as pat
 pub use paths::resolve as resolve_path;
 pub use pattern::literal_shell_pattern;
 pub use policy::{
-    BrowserOpen, Defaults, McpSettings, OldNames, Policy, PolicyError, ProjectHookOff, ProjectTop,
-    Require, RequiredBy, RequiredLevel, Requirement, RuleGroup, RunBoundary, SUPPORTED_VERSION,
-    SandboxSettings, TITLE_MAX_CHARS, Unattended, WHY_MAX_CHARS, env_name_problem,
+    BrowserOpen, DeclaredVersion, Defaults, McpSettings, OldNames, Policy, PolicyError,
+    ProjectHookOff, ProjectTop, Require, RequiredBy, RequiredLevel, Requirement, RuleGroup,
+    RunBoundary, SUPPORTED_VERSION, SandboxSettings, TITLE_MAX_CHARS, Unattended, WHY_MAX_CHARS,
+    declared_version, env_name_problem,
 };
 pub use programs::{MapResolver, NoResolver, ProgramResolver};
 pub use realpath::{MapPathResolver, PathResolver};
 pub use repo::{REPO_RULE_PREFIX, RepoPolicy};
+pub use requests::{
+    REQUESTS_RULE_PREFIX, RequestCheck, RequestEntry, RequestRules, Untrusted as RequestsUntrusted,
+};
 pub use secret::{
     CommandHome as SecretCommandHome, CommandSource as SecretCommand, METHOD_OVERRIDE_HEADERS,
     PathRefusal, Permit, RequestPath, Route as SecretRoute, SECRET_RULE_PREFIX, Secret,
