@@ -81,15 +81,16 @@ impl Sandbox {
         for host_dir in host_dirs {
             std::fs::create_dir_all(home.join(host_dir)).unwrap();
         }
-        let state_home = std::env::var_os("XDG_STATE_HOME")
-            .map(PathBuf::from)
-            .unwrap_or_else(|| {
+        let state_home = std::env::var_os("XDG_STATE_HOME").map_or_else(
+            || {
                 std::env::var_os("HOME")
                     .map(PathBuf::from)
                     .unwrap_or_default()
                     .join(".local")
                     .join("state")
-            });
+            },
+            PathBuf::from,
+        );
         Self {
             _dir: dir,
             home,
