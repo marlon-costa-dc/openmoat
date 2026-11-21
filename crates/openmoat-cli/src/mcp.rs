@@ -40,9 +40,12 @@ pub use pins::{Change, Pins};
 /// The MCP servers some host provides itself, which no MCP configuration file
 /// defines, each with that host ([`openmoat_hosts::HostSpec::builtin_mcp`]).
 fn builtin_servers() -> impl Iterator<Item = (Host, &'static str)> {
-    Host::EVERY.into_iter().filter_map(|provider| {
-        let builtin = provider.spec().builtin_mcp.as_ref()?;
-        Some((provider, builtin.server))
+    Host::EVERY.into_iter().flat_map(|provider| {
+        provider
+            .spec()
+            .builtin_mcp
+            .iter()
+            .map(move |builtin| (provider, builtin.server))
     })
 }
 

@@ -27,10 +27,7 @@ fn brew_install(prefix: &Path, version: &str) {
 /// A home outside the temp directory: `init` refuses a binary inside one.
 fn outside_temp() -> Sandbox {
     let parent = Sandbox::worktree_temp_root();
-    Sandbox::bare_in(
-        &parent,
-        &[&dir_of(Host::ClaudeCode)],
-    )
+    Sandbox::bare_in(&parent, &[&dir_of(Host::ClaudeCode)])
 }
 
 fn hook_command(sb: &Sandbox) -> String {

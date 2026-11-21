@@ -32,7 +32,7 @@ impl HostSpec {
         docs: HostDocs::BASE,
         session_dir: super::SessionDir::Payload,
         workspace: None,
-        builtin_mcp: None,
+        builtin_mcp: &[],
         payload_copies: 1,
         limit: None,
         other_hooks: None,

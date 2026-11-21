@@ -800,7 +800,9 @@ unlisted hosts. The atom never appears in a session that read no secret.
   itself) is Claude in Chrome's tab, window, browser and shortcut lists:
   `mcp__claude-in-chrome__tabs_context_mcp`, `tabs_create_mcp`, `tabs_close_mcp`,
   `list_connected_browsers`, `select_browser`, `switch_browser`, `resize_window` and
-  `shortcuts_list`. A page sets its own title and URL, so their output is still read for
+  `shortcuts_list`, and the Claude desktop app's task list and closing box,
+  `mcp__ccd_turn__update_plan` and `mcp__ccd_turn__wrap_up`, which the app provides to
+  the Claude Code session it runs. A page sets its own title and URL, so their output is still read for
   injected input (§4.1.2): a host, path or command in a tab's title or URL is kept with the
   tool as its source, and a later `curl` to that host needs review (`injected-input`).
   Every tool that returns a page's content still taints the session as before:

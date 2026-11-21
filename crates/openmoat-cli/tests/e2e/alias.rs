@@ -19,10 +19,7 @@ fn exe(name: &str) -> String {
 /// A home outside the temp directory (`init` refuses a binary inside one)
 /// with `bin/` holding nothing yet.
 fn home_with_bin() -> (Sandbox, PathBuf) {
-    let sb = Sandbox::bare_in(
-        &Sandbox::worktree_temp_root(),
-        &[&dir_of(Host::ClaudeCode)],
-    );
+    let sb = Sandbox::bare_in(&Sandbox::worktree_temp_root(), &[&dir_of(Host::ClaudeCode)]);
     let bin = sb.home.join("bin");
     fs::create_dir_all(&bin).unwrap();
     (sb, bin)

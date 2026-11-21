@@ -252,21 +252,32 @@ pub(crate) static SPEC: HostSpec = HostSpec {
     // Every tool that returns what a page says (`get_page_text`, `read_page`,
     // `find`, `navigate`, `javascript_tool`, the console and network logs,
     // screenshots) is left out (ADR-057 amendment of 2026-11-07).
-    builtin_mcp: Some(crate::contract::BuiltinMcp {
-        server: "claude-in-chrome",
-        why: "Claude Code: Claude in Chrome's tab, window, browser and shortcut lists (tab ids,\n\
-              titles, URLs), the browser's own bookkeeping",
-        metadata_tools: &[
-            "list_connected_browsers",
-            "resize_window",
-            "select_browser",
-            "shortcuts_list",
-            "switch_browser",
-            "tabs_close_mcp",
-            "tabs_context_mcp",
-            "tabs_create_mcp",
-        ],
-    }),
+    // The Claude desktop app's own turn tools (`ccd_turn`), which the app
+    // provides to the Claude Code session it runs: their results are the app's
+    // task list and closing box, never text another party wrote.
+    builtin_mcp: &[
+        crate::contract::BuiltinMcp {
+            server: "claude-in-chrome",
+            why: "Claude Code: Claude in Chrome's tab, window, browser and shortcut lists (tab ids,\n\
+                  titles, URLs), the browser's own bookkeeping",
+            metadata_tools: &[
+                "list_connected_browsers",
+                "resize_window",
+                "select_browser",
+                "shortcuts_list",
+                "switch_browser",
+                "tabs_close_mcp",
+                "tabs_context_mcp",
+                "tabs_create_mcp",
+            ],
+        },
+        crate::contract::BuiltinMcp {
+            server: "ccd_turn",
+            why: "Claude Code: the Claude desktop app's task list and closing box, the app's own\n\
+                  bookkeeping",
+            metadata_tools: &["update_plan", "wrap_up"],
+        },
+    ],
     weekly: weekly::WEEKLY,
     hook_off: hook_off::HOOK_OFF,
     plugin: crate::contract::Plugin::Package(&plugin::SPEC),

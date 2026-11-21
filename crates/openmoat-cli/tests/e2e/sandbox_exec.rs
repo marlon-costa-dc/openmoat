@@ -114,10 +114,7 @@ fn codex_from_the_standalone_installer_starts_commands() {
         return;
     };
     // Outside the read roots (`/tmp`), as a home directory is.
-    let sb = Sandbox::bare_in(
-        &Sandbox::worktree_temp_root(),
-        &[&dir_of(Host::Codex)],
-    );
+    let sb = Sandbox::bare_in(&Sandbox::worktree_temp_root(), &[&dir_of(Host::Codex)]);
     let standalone = sb.home.join(".codex/packages/standalone");
     let install = |version: &str| {
         let release = standalone.join(format!("releases/{version}-x86_64-unknown-linux-musl"));

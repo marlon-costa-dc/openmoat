@@ -190,9 +190,9 @@ pub struct HostSpec {
     /// them too ([`HookRequest::with_workspace_dirs`]); `None` for a host
     /// without such a setting.
     pub workspace: Option<WorkspaceSpec>,
-    /// The MCP server the host provides itself, whose listed tools return
-    /// metadata, not content; `None` for most hosts.
-    pub builtin_mcp: Option<BuiltinMcp>,
+    /// The MCP servers the host provides itself, whose listed tools return
+    /// metadata, not content; empty for most hosts.
+    pub builtin_mcp: &'static [BuiltinMcp],
     /// How many times the payload carries a call's arguments (Cline sends them
     /// as `tool_call.input` and again as `preToolUse.parameters`): the guard
     /// reads that many times its per-call limit, so a file is refused at the

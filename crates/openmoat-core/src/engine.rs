@@ -207,7 +207,9 @@ impl<'p> CompiledPolicy<'p> {
             && let Some(first) = decision.reasons.first_mut()
             && !first.contains("[allow hint:")
         {
-            first.push_str(&format!(" [allow hint: {hint}]"));
+            first.push_str(" [allow hint: ");
+            first.push_str(&hint);
+            first.push(']');
         }
         decision
     }
