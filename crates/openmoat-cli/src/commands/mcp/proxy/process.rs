@@ -17,9 +17,13 @@ mod platform;
 pub(super) use platform::own;
 
 const GRACE: Duration = Duration::from_secs(1);
+const REPLY_GRACE: Duration = Duration::from_secs(5);
 
 pub(super) enum Pump {
-    Host(Result<()>),
+    Host {
+        result: Result<()>,
+        pending_replies: bool,
+    },
     Server(Result<()>),
 }
 
@@ -38,11 +42,17 @@ fn drain(finished: &Receiver<Pump>) -> Result<()> {
         .recv()
         .context("MCP relay stopped without reporting its result")?;
     loop {
-        match next {
+        let grace = match next {
             Pump::Server(result) => return result,
-            Pump::Host(result) => result?,
-        }
-        next = match finished.recv_timeout(GRACE) {
+            Pump::Host {
+                result,
+                pending_replies,
+            } => {
+                result?;
+                if pending_replies { REPLY_GRACE } else { GRACE }
+            }
+        };
+        next = match finished.recv_timeout(grace) {
             Ok(event) => event,
             Err(RecvTimeoutError::Timeout) => {
                 bail!("MCP server did not close its output after client EOF")

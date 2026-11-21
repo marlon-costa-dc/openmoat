@@ -217,6 +217,11 @@ impl Relay {
         self.state.lock().unwrap_or_else(PoisonError::into_inner)
     }
 
+    /// Whether an accepted host request still needs a response at client EOF.
+    pub fn has_pending_replies(&self) -> bool {
+        !self.state().pending.is_empty()
+    }
+
     /// One line from the host.
     pub fn host_line(&self, line: &str) -> Vec<Routed> {
         let Some(message) = read(line) else {

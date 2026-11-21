@@ -114,7 +114,7 @@ pub fn of(
         return None;
     }
     let words = decision.rules.iter().find_map(|r| titles.get(r))?;
-    let mut next = words
+    let next = words
         .next
         .filter(|(verdict, _)| *verdict == decision.verdict)
         .map(|(_, next)| next.to_owned());
@@ -142,13 +142,6 @@ pub fn of(
             detail = compound;
         } else {
             detail = format!("{detail}; {compound}");
-        }
-        if next.is_none() && decision.verdict == Verdict::Deny {
-            next = Some(
-                "one part of this compound call triggered the rule above; if you need that part, \
-                 do it yourself in your own terminal"
-                    .to_owned(),
-            );
         }
     }
     Some(Box::new(Notice {

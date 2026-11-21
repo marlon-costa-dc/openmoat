@@ -8,6 +8,14 @@ view at the end of the file.
 
 ## [Unreleased]
 
+## [0.24.0-dc3] - 2026-11-21
+
+### Fixed
+- Claude Desktop's task list and wrap-up tools no longer taint later writes. Content returned by other MCP tools still does.
+- Keep the deciding rule's guidance when a blocked Claude call also contains allowed actions.
+- Isolate shell pipeline patterns and carry unseen reviews into session taint.
+- Give accepted MCP requests time to finish after client EOF while keeping idle servers on the shorter shutdown timeout.
+
 ## [0.24.0-dc2] - 2026-11-20
 
 ### Added
@@ -1390,6 +1398,7 @@ First beta and first release that is not a GitHub pre-release.
 - Documentation restructured for the decide-only alpha (#94). New `docs/ROADMAP.md`, `docs/ARCHITECTURE.md`, `docs/THREAT_MODEL.md` and an ADR index (`docs/adr/README.md`). `docs/OVERVIEW.md`, `DESIGN.md`, `STRENGTH.md`, `PROGRESS.md`, `TECH_STACK.md` and `REPO_STRUCTURE.md` are retired; what was still true moved into the new documents. README: `git clone` install step, `CLAUDE_CONFIG_DIR`, examples checked against the default policy. SECURITY.md: supported versions (latest alpha only). `moat --help` says what the operating system does and does not enforce.
 
 [Unreleased]: https://github.com/crocodile-labs/openmoat/compare/v0.24.0...HEAD
+[0.24.0-dc3]: https://github.com/marlon-costa-dc/openmoat/compare/v0.24.0-dc2...v0.24.0-dc3
 [0.24.0]: https://github.com/crocodile-labs/openmoat/compare/v0.23.1...v0.24.0
 [0.23.1]: https://github.com/crocodile-labs/openmoat/compare/v0.23.0...v0.23.1
 [0.23.0]: https://github.com/crocodile-labs/openmoat/compare/v0.22.1...v0.23.0

@@ -80,7 +80,10 @@ pub fn run(args: &McpProxyArgs) -> Result<Code> {
             .lock()
             .unwrap_or_else(PoisonError::into_inner)
             .take();
-        let _ = host_done.send(process::Pump::Host(pumped));
+        let _ = host_done.send(process::Pump::Host {
+            result: pumped,
+            pending_replies: relay_in.has_pending_replies(),
+        });
     });
     std::thread::spawn(move || {
         let pumped = relay::pump_server(
