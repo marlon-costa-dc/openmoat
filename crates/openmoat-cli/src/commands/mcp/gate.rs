@@ -217,13 +217,13 @@ impl Gateway {
                 self.host.is_none_or(|own| own == host) && names_tool(host, &t.tool, server, tool)
             })
         };
-        if self.host == Some(Host::Codex)
+        if let Some(ids) = self.host.and_then(|host| host.spec().mcp_call_ids.as_ref())
             && let Some(meta) = call.metadata
-            && (meta.get("threadId").is_some() || meta.get("callId").is_some())
+            && (meta.get(ids.session).is_some() || meta.get(ids.call).is_some())
         {
             let (Some(thread), Some(call_id)) = (
-                meta.get("threadId").and_then(Value::as_str),
-                meta.get("callId").and_then(Value::as_str),
+                meta.get(ids.session).and_then(Value::as_str),
+                meta.get(ids.call).and_then(Value::as_str),
             ) else {
                 return Ok(None);
             };

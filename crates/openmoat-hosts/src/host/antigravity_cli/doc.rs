@@ -24,6 +24,11 @@ const TOOLS: &[ToolRow] = &[
         "`FsRead` / `FsWrite`",
     ),
     ToolRow::new(
+        "`read_file` / `write_file`, `edit_file` (Antigravity 2.0)",
+        "`Path`",
+        "`FsRead` / `FsWrite`",
+    ),
+    ToolRow::new(
         "`find_by_name`, `grep_search`",
         "`SearchDirectory`, `SearchPath`, and the directory `Pattern` or `Includes` names \
          before its first wildcard and where a `..` climbs to",

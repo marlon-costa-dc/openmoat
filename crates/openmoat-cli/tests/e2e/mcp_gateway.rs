@@ -230,7 +230,8 @@ fn closing_stdin_reaps_an_upstream_that_ignores_eof() {
 
 #[test]
 fn attributed_codex_requests_reach_stdio_only_with_their_own_exact_ticket() {
-    let gw = Gateway::for_host(Some("codex"));
+    let codex = Host::Codex.spec().id;
+    let gw = Gateway::for_host(Some(codex));
     let policy_path = gw.sb.home.join(".moat/policy.yaml");
     let policy = std::fs::read_to_string(&policy_path).unwrap();
     assert!(policy.contains("\nallow:\n"));
@@ -249,7 +250,7 @@ fn attributed_codex_requests_reach_stdio_only_with_their_own_exact_ticket() {
     let arguments = json!({"q": "same query"});
     for session in ["thread-a", "thread-b"] {
         let output = gw.sb.guard(
-            "codex",
+            codex,
             &json!({
                 "session_id": session, "cwd": gw.sb.project(),
                 "hook_event_name": "PreToolUse", "tool_name": "mcp__docs__search",
@@ -283,7 +284,7 @@ fn attributed_codex_requests_reach_stdio_only_with_their_own_exact_ticket() {
         gw.sb
             .command()
             .env("MOAT_RUN_SESSION", "run-mcp-audit-test")
-            .args(["guard", "--host", "codex"]),
+            .args(["guard", "--host", codex]),
         Some(
             &json!({
                 "session_id": "thread-failed", "cwd": gw.sb.project(),

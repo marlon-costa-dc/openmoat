@@ -110,6 +110,11 @@ pub(crate) static SPEC: HostSpec = HostSpec {
         tool_names: &Prefixed,
         auto_start: None,
     }),
+    // Codex's MCP requests name the thread and the call in `_meta`.
+    mcp_call_ids: Some(crate::contract::McpCallIds {
+        session: "threadId",
+        call: "callId",
+    }),
     sandbox: Some(SandboxSpec {
         format: SandboxFormat::CodexProfile,
         file: "config.toml",

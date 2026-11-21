@@ -33,6 +33,7 @@ impl HostSpec {
         session_dir: super::SessionDir::Payload,
         workspace: None,
         builtin_mcp: &[],
+        mcp_call_ids: None,
         payload_copies: 1,
         limit: None,
         other_hooks: None,
