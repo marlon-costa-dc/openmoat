@@ -55,6 +55,10 @@ fn cat_output(codex: &Path, sb: &Sandbox, project: &Path, file: &str) -> Output 
         .env_clear()
         .env("PATH", "/usr/bin:/bin")
         .env("HOME", &sb.home)
+        // The tool manager keeps the config-trust state under the state home;
+        // a cleared environment leaves it without one, and the manager then
+        // refuses the operator's own configuration as untrusted.
+        .env("XDG_STATE_HOME", &sb.state_home)
         .env("CODEX_HOME", sb.home.join(dir_of(Host::Codex)))
         .output()
         .expect("running codex sandbox")

@@ -61,6 +61,9 @@ fn flag_versions() -> impl Iterator<Item = (String, String)> {
 pub struct Sandbox {
     _dir: TempDir,
     pub home: PathBuf,
+    /// The operator's own state home: where the tool manager keeps the
+    /// config-trust state a sandboxed tool reads.
+    pub state_home: PathBuf,
 }
 
 impl Sandbox {
@@ -102,7 +105,21 @@ impl Sandbox {
         for host_dir in host_dirs {
             std::fs::create_dir_all(home.join(host_dir)).unwrap();
         }
-        Self { _dir: dir, home }
+        let state_home = std::env::var_os("XDG_STATE_HOME").map_or_else(
+            || {
+                std::env::var_os("HOME")
+                    .map(PathBuf::from)
+                    .unwrap_or_default()
+                    .join(".local")
+                    .join("state")
+            },
+            PathBuf::from,
+        );
+        Self {
+            _dir: dir,
+            home,
+            state_home,
+        }
     }
 
     /// `bare(host_dirs)` followed by a successful `moat init`.
@@ -162,6 +179,13 @@ impl Sandbox {
             .env("PATH", std::env::var_os("PATH").unwrap_or_default())
             .env("HOME", &self.home)
             .env("USERPROFILE", &self.home)
+            // Mise keeps the config-trust state under the state home, and a
+            // sandbox home has none: a tool the sandbox runs through the
+            // manager would read the operator's real config and refuse it as
+            // untrusted, which fails the command before it does anything.
+            // The state home stays the operator's own, exactly as the fleet's
+            // native acceptance binds it.
+            .env("XDG_STATE_HOME", &self.state_home)
             .envs(flag_versions())
             // Debug builds take OpenCode's version from here instead of running the `opencode` on
             // `PATH` (`install/host_version.rs`); empty is none found
