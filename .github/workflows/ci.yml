@@ -3,7 +3,7 @@ name: ci
 on:
   pull_request:
   push:
-    branches: [main]
+    branches: [main, dc-use]
   workflow_dispatch:
 
 # A new push to a pull request cancels its older run; runs on main are never cancelled.

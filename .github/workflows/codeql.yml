@@ -19,7 +19,7 @@ on:
       - "docs/assets/**"
       - "changelog.d/**"
   push:
-    branches: [main]
+    branches: [main, dc-use]
   schedule:
     - cron: "17 4 * * 1" # Mondays
   workflow_dispatch:
