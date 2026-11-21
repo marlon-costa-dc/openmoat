@@ -1167,8 +1167,9 @@ After the client closes its input, the stdio MCP proxy gives the server five
 seconds to drain replies to accepted requests still pending. An idle server
 has one second to close its output. After the server closes its output, it
 has one second to exit. If the upstream does not finish, the proxy stops and
-reaps it and reports the timeout. On Unix the upstream has its own process
-group so descendants in that group do not keep the relay open.
+reaps it and reports the timeout. An upstream that exits successfully with
+requests unanswered reports a protocol failure. On Unix the upstream has its
+own process group so descendants in that group do not keep the relay open.
 
 Exit codes: 0 allow or success, 1 the program `openmoat run` or `openmoat mcp proxy` started
 exited non-zero, or `openmoat mcp proxy` refused to start the server, or a layer `openmoat bench

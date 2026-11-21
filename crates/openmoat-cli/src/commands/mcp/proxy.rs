@@ -93,7 +93,8 @@ pub fn run(args: &McpProxyArgs) -> Result<Code> {
             &*host,
             &note,
         );
-        let _ = done.send(process::Pump::Server(pumped));
+        let pending_replies = pumped.map(|()| relay.has_pending_replies());
+        let _ = done.send(process::Pump::Server(pending_replies));
     });
     let status = process::supervise(child, &finished)?;
     Ok(if status.success() {

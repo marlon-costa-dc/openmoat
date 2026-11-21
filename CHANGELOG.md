@@ -15,6 +15,7 @@ view at the end of the file.
 - Keep the deciding rule's guidance when a blocked Claude call also contains allowed actions.
 - Isolate shell pipeline patterns and carry unseen reviews into session taint.
 - Give accepted MCP requests time to finish after client EOF while keeping idle servers on the shorter shutdown timeout.
+- Report a protocol failure when an MCP server exits successfully with accepted requests unanswered.
 
 ## [0.24.0-dc2] - 2026-11-20
 
