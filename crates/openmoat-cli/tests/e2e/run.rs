@@ -132,9 +132,10 @@ pub(crate) fn run_sh_flags(
 }
 
 pub(crate) fn installed_with_secret() -> (Sandbox, PathBuf) {
-    // Linux's test homes stay out of the shared temp directory, as a real home is.
+    // Linux's test homes stay out of the shared temp directory, as a real home is,
+    // and out of the repository/worktree tree that Codex's Linux sandbox scans.
     let parent = if cfg!(target_os = "linux") {
-        PathBuf::from(env!("CARGO_TARGET_TMPDIR"))
+        Sandbox::worktree_temp_root()
     } else {
         std::env::temp_dir()
     };

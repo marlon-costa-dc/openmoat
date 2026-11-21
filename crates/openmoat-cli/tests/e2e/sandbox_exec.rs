@@ -115,7 +115,7 @@ fn codex_from_the_standalone_installer_starts_commands() {
     };
     // Outside the read roots (`/tmp`), as a home directory is.
     let sb = Sandbox::bare_in(
-        Path::new(env!("CARGO_TARGET_TMPDIR")),
+        &Sandbox::worktree_temp_root(),
         &[&dir_of(Host::Codex)],
     );
     let standalone = sb.home.join(".codex/packages/standalone");

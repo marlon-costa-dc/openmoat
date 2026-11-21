@@ -330,7 +330,7 @@ pub mod executing {
     /// root and the host sandboxes let commands write their temp directory, so
     /// the home lives elsewhere, as a real home does.
     pub fn fixtures() -> Fixtures {
-        Fixtures::build_in(Path::new(env!("CARGO_TARGET_TMPDIR")))
+        Fixtures::build_in(&crate::common::Sandbox::worktree_temp_root())
     }
 
     /// Run every script as the evil project's test script with `run`, under

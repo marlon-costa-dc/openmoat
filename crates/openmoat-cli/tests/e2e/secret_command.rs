@@ -2,13 +2,12 @@
 //! the agent could change, and none from a folder any user can write.
 
 use std::fs;
-use std::path::Path;
 
 use crate::common::{OK, Sandbox, USAGE, stderr, text};
 
 /// An installed home outside `/tmp` (no command source may be there).
 fn home() -> Sandbox {
-    Sandbox::installed_in(Path::new(env!("CARGO_TARGET_TMPDIR")), &[])
+    Sandbox::installed_in(&Sandbox::worktree_temp_root(), &[])
 }
 
 /// `sb`'s policy with secret `cloud` from `run`.

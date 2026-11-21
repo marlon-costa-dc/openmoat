@@ -39,7 +39,7 @@ fn set_up(host: Host) -> (Sandbox, PathBuf) {
     // home is: `openmoat run` refuses a state directory inside one its
     // sandbox grants (as `run::installed_with_secret` does).
     let parent = if cfg!(target_os = "linux") {
-        PathBuf::from(env!("CARGO_TARGET_TMPDIR"))
+        Sandbox::worktree_temp_root()
     } else {
         std::env::temp_dir()
     };

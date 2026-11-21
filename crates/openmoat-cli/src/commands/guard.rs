@@ -42,7 +42,7 @@ mod relayed;
 mod required;
 mod session_start;
 mod unattended;
-mod unseen;
+pub(crate) mod unseen;
 
 /// How far into [`GUARD_BUDGET_S`] the session's taint may be folded, leaving
 /// time to record: a session too long to fold in time is denied with a

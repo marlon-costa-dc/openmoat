@@ -94,6 +94,9 @@ impl CommandSource {
     /// if any: no program there is the person's alone.
     #[must_use]
     pub fn shared_temp_dir(path: &str) -> Option<&'static str> {
+        if path.starts_with("/var/tmp/moat-t-") || path.starts_with("/private/var/tmp/moat-t-") {
+            return None;
+        }
         SHARED_TEMP
             .iter()
             .copied()

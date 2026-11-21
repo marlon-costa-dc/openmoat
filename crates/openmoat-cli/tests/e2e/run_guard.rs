@@ -211,7 +211,7 @@ except OSError:
 fn a_state_directory_inside_the_project_is_refused() {
     use crate::common::USAGE;
 
-    let sb = Sandbox::bare_in(Path::new(env!("CARGO_TARGET_TMPDIR")), &[]);
+    let sb = Sandbox::bare_in(&Sandbox::worktree_temp_root(), &[]);
     let project = sb.project();
     let state = project.join("state");
     let moved = state.to_string_lossy().into_owned();

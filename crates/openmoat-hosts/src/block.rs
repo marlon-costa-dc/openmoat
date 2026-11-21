@@ -83,7 +83,7 @@ pub(crate) fn message(decision: &Decision) -> Option<String> {
     if let Some(why) = &notice.why {
         lines.push(row("why", why));
     }
-    lines.push(row("next", &next(decision.verdict, notice)));
+    lines.push(row("next", &next(decision, notice)));
     lines.push(row("more", &more(decision, held)));
     Some(lines.join("\n"))
 }
@@ -95,13 +95,27 @@ fn row(label: &str, text: &str) -> String {
 
 /// The one thing the person can do: how to approve where the host cannot ask,
 /// else the deciding check's own step, else the verdict's.
-fn next(verdict: Verdict, notice: &Notice) -> String {
+fn next(decision: &Decision, notice: &Notice) -> String {
+    let verdict = decision.verdict;
+    let is_taint = decision
+        .rules
+        .iter()
+        .any(|r| r == openmoat_core::rule_id::SESSION_TAINT);
     match (&notice.unasked, &notice.next, verdict) {
+        (Some(why), _, _) if is_taint => format!(
+            "{why}, so approve it in your terminal: run `openmoat`, or `openmoat allow --last` \
+             (answer `s` for every protected write of this session), then retry"
+        ),
         (Some(why), _, _) => format!(
             "{why}, so approve it in your terminal: run `openmoat`, or `openmoat allow --last`, \
              then retry"
         ),
         (None, Some(next), _) => next.clone(),
+        (None, None, Verdict::Review) if is_taint => {
+            "approve it in this prompt only if you expected it (or run `openmoat allow --last` \
+             and answer `s` for every protected write of this session)"
+                .to_owned()
+        }
         (None, None, Verdict::Review) => REVIEW_NEXT.to_owned(),
         (None, None, _) => DENY_NEXT.to_owned(),
     }

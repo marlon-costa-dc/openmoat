@@ -20,7 +20,7 @@ fn exe(name: &str) -> String {
 /// with `bin/` holding nothing yet.
 fn home_with_bin() -> (Sandbox, PathBuf) {
     let sb = Sandbox::bare_in(
-        Path::new(env!("CARGO_TARGET_TMPDIR")),
+        &Sandbox::worktree_temp_root(),
         &[&dir_of(Host::ClaudeCode)],
     );
     let bin = sb.home.join("bin");

@@ -233,7 +233,7 @@ fn removing_the_requirement_without_a_person_is_caught_by_the_lock() {
 fn run_refuses_a_program_below_the_required_level() {
     // Outside `/tmp` on Linux, as every home `openmoat run` tests use.
     let parent = if cfg!(target_os = "linux") {
-        std::path::PathBuf::from(env!("CARGO_TARGET_TMPDIR"))
+        Sandbox::worktree_temp_root()
     } else {
         std::env::temp_dir()
     };

@@ -60,7 +60,7 @@ fn every_reason_keeps_its_own_text() {
         assert!(detail.contains(part), "{part}: {detail}");
     }
     assert!(!detail.contains('…'), "{detail}");
-    let long = Decision::single(Verdict::Deny, "keys", "z".repeat(400));
+    let long = Decision::single(Verdict::Deny, "keys", "z".repeat(700));
     let notice = of(
         &long,
         &Titles::of(&policy, &long),
@@ -68,7 +68,7 @@ fn every_reason_keeps_its_own_text() {
         &KnownSecrets::default(),
     )
     .unwrap();
-    assert_eq!(notice.detail.unwrap().chars().count(), 300);
+    assert_eq!(notice.detail.unwrap().chars().count(), 600);
 }
 
 /// No title, an allow or a defer: no notice, so the host gets the one line.

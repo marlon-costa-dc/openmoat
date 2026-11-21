@@ -121,6 +121,11 @@ impl GlobPattern {
     }
 
     #[must_use]
+    pub fn source(&self) -> &str {
+        &self.source
+    }
+
+    #[must_use]
     pub fn is_match(&self, candidate: &str) -> bool {
         self.matcher.is_match(candidate) || self.dir.as_ref().is_some_and(|d| d.is_match(candidate))
     }
@@ -230,6 +235,48 @@ impl ShellPattern {
             tokens,
             negated,
         })
+    }
+
+    #[must_use]
+    pub fn source(&self) -> &str {
+        &self.source
+    }
+
+    /// True when this pattern contains a pipeline or list operator token
+    /// (`|`, `;`, `&&`, `||`, `&`) and is therefore meant for `AtomicAction::Pipeline`.
+    #[must_use]
+    pub fn is_pipeline_pattern(&self) -> bool {
+        self.tokens.iter().any(|t| {
+            matches!(
+                t,
+                Token::One(_, text) if matches!(text.as_str(), "|" | ";" | "&&" | "||" | "&")
+            )
+        })
+    }
+
+    /// True when this pattern matches the program token (`argv[0]`), and for
+    /// multi-word commands where the second token is a literal subcommand
+    /// (such as `git remote` or `docker build`), also matches `argv[1]`.
+    #[must_use]
+    pub fn matches_command_head(&self, argv: &[String]) -> bool {
+        let Some(first) = argv.first() else {
+            return false;
+        };
+        let mut tokens = self.tokens.iter().filter(|t| !matches!(t, Token::End));
+        let Some(Token::One(prog_glob, _)) = tokens.next() else {
+            return false;
+        };
+        if !prog_glob.is_match(first) {
+            return false;
+        }
+        if let (Some(second_arg), Some(Token::One(sub_glob, sub_src))) =
+            (argv.get(1), tokens.next())
+            && !sub_src.starts_with('-')
+            && !has_glob_syntax(sub_src)
+        {
+            return sub_glob.is_match(second_arg);
+        }
+        true
     }
 
     #[must_use]
@@ -468,5 +515,16 @@ mod tests {
         assert!(any_match(&pats, "/p/src/main.rs"));
         assert!(!any_match(&pats, "/p/.git/config"));
         assert!(!any_match(&pats, "/q/x"));
+    }
+
+    #[test]
+    fn pipeline_pattern_distinguishes_operators_from_simple_commands() {
+        let simple = ShellPattern::compile("git remote *").unwrap();
+        assert!(!simple.is_pipeline_pattern());
+        assert_eq!(simple.source(), "git remote *");
+        let pipe = ShellPattern::compile("curl * | sh").unwrap();
+        assert!(pipe.is_pipeline_pattern());
+        let list = ShellPattern::compile("cd * && make").unwrap();
+        assert!(list.is_pipeline_pattern());
     }
 }

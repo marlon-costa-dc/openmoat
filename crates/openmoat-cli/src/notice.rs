@@ -22,12 +22,12 @@ fn builtin(rule: &str) -> Option<Words<'static>> {
 }
 
 /// The longest call shown, in characters; a longer one loses its middle.
-pub const CALL_CHARS: usize = 100;
+pub const CALL_CHARS: usize = 240;
 
 /// The longest reason shown on the `rule` line; each reason is cut on its own,
 /// so a decision of two rules (`runs-later` and `session-taint`) keeps both,
 /// the second one's source included.
-const DETAIL_CHARS: usize = 300;
+const DETAIL_CHARS: usize = 600;
 
 /// What heads the message of one rule: its title and `why`, and for one of
 /// OpenMoat's own checks the person's step for a decision of that verdict.
@@ -114,7 +114,7 @@ pub fn of(
         return None;
     }
     let words = decision.rules.iter().find_map(|r| titles.get(r))?;
-    let next = words
+    let mut next = words
         .next
         .filter(|(verdict, _)| *verdict == decision.verdict)
         .map(|(_, next)| next.to_owned());
@@ -123,12 +123,34 @@ pub fn of(
         .map(|(tool, action)| middle(&shown(&paths, known, &call_text(tool, action)), CALL_CHARS));
     // The reasons keep their paths as written: the `rule` line is the line
     // earlier releases sent, masked and on one line, each reason shortened alone.
-    let detail = decision
+    let mut detail = decision
         .reasons
         .iter()
         .map(|reason| middle(&masked(known, reason), DETAIL_CHARS))
         .collect::<Vec<_>>()
         .join("; ");
+    if !decision.context.is_empty() {
+        let allowed = decision
+            .context
+            .iter()
+            .take(3)
+            .map(|c| middle(&masked(known, c), 120))
+            .collect::<Vec<_>>()
+            .join(", ");
+        let compound = format!("allowed sub-actions in this call: {allowed}");
+        if detail.is_empty() {
+            detail = compound;
+        } else {
+            detail = format!("{detail}; {compound}");
+        }
+        if next.is_none() && decision.verdict == Verdict::Deny {
+            next = Some(
+                "one part of this compound call triggered the rule above; if you need that part, \
+                 do it yourself in your own terminal"
+                    .to_owned(),
+            );
+        }
+    }
     Some(Box::new(Notice {
         title: clean(words.title).into_owned(),
         why: words.why.map(|w| clean(w).into_owned()),

@@ -30,8 +30,9 @@ fn write_payload(cwd: &Path, path: &Path) -> String {
 
 #[test]
 fn a_binary_under_another_name_is_protected_by_its_recorded_path() {
+    let parent = Sandbox::worktree_temp_root();
     let sb = Sandbox::bare_in(
-        Path::new(env!("CARGO_TARGET_TMPDIR")),
+        &parent,
         &[&dir_of(Host::ClaudeCode), &dir_of(Host::Codex)],
     );
     let root = sb.home.parent().unwrap().to_path_buf();
@@ -100,7 +101,7 @@ fn a_binary_under_another_name_is_protected_by_its_recorded_path() {
 #[test]
 fn init_refuses_a_binary_inside_the_project() {
     let sb = Sandbox::bare_in(
-        Path::new(env!("CARGO_TARGET_TMPDIR")),
+        &Sandbox::worktree_temp_root(),
         &[&dir_of(Host::ClaudeCode)],
     );
     let project = sb.project();
@@ -121,7 +122,7 @@ fn init_refuses_a_binary_inside_the_project() {
 #[test]
 fn init_refuses_a_binary_in_a_temp_directory() {
     let sb = Sandbox::bare_in(
-        Path::new(env!("CARGO_TARGET_TMPDIR")),
+        &Sandbox::worktree_temp_root(),
         &[&dir_of(Host::ClaudeCode)],
     );
     let tmp = tempfile::tempdir().unwrap();

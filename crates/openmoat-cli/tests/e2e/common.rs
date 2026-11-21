@@ -64,6 +64,30 @@ pub struct Sandbox {
 }
 
 impl Sandbox {
+    /// A private per-worktree root outside the shared temp directory (`/tmp`)
+    /// and outside the repository/worktree tree that Codex's Linux sandbox
+    /// scans with `rg --files` to expand `**/` deny globs.
+    pub fn worktree_temp_root() -> PathBuf {
+        use sha2::Digest as _;
+        let digest = sha2::Sha256::digest(env!("CARGO_TARGET_TMPDIR").as_bytes());
+        let slug = format!(
+            "moat-t-{:02x}{:02x}{:02x}{:02x}",
+            digest[0], digest[1], digest[2], digest[3]
+        );
+        let root = PathBuf::from("/var/tmp").join(slug);
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::{DirBuilderExt as _, PermissionsExt as _};
+            let mut builder = std::fs::DirBuilder::new();
+            builder.recursive(true).mode(0o700);
+            builder.create(&root).unwrap();
+            let _ = std::fs::set_permissions(&root, std::fs::Permissions::from_mode(0o700));
+        }
+        #[cfg(not(unix))]
+        std::fs::create_dir_all(&root).unwrap();
+        root
+    }
+
     /// A home containing the given host configuration directories
     /// (`.claude`, `.codex`, `.cursor`); nothing is installed.
     pub fn bare(host_dirs: &[&str]) -> Self {

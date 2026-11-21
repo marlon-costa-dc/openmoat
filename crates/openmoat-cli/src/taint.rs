@@ -346,7 +346,7 @@ fn digest(host: Host, policy: &CompiledPolicy<'_>) -> Result<String> {
 
 /// The layout of a cached fold, part of every digest: a build that keys rows
 /// another way never reads a row written this way.
-const FOLD_FORMAT: &str = "fold-2";
+const FOLD_FORMAT: &str = "fold-3";
 
 /// `parts`, each length-prefixed, so no two different lists hash alike.
 fn parts(parts: &[&str]) -> Vec<u8> {
@@ -594,12 +594,16 @@ fn after_read(granted_ms: i64, seen_row: Option<i64>, read_ms: i64, read_row: Op
 }
 
 /// Whether a call decided `verdict` may have run: it was allowed, or it was held
-/// for review by a host that can prompt (Codex turns a review into a deny). A person may have
-/// declined a review; that is not recorded, so it counts as run.
+/// for review by a host that can prompt (Codex turns a review into a deny, as does
+/// any host where `unseen::holds(host)` turns `PreToolUse` into `PreToolUseNoPrompt`).
+/// A person may have declined a review; that is not recorded, so it counts as run.
 pub(crate) fn ran(host: Host, verdict: Verdict) -> bool {
-    host.answer(&HookEvent::PreToolUse, &Decision::new(verdict))
-        .verdict
-        != Verdict::Deny
+    let event = if crate::commands::guard::unseen::holds(host) {
+        HookEvent::PreToolUseNoPrompt
+    } else {
+        HookEvent::PreToolUse
+    };
+    host.answer(&event, &Decision::new(verdict)).verdict != Verdict::Deny
 }
 
 #[cfg(test)]

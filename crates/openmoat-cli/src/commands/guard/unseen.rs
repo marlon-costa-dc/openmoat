@@ -32,7 +32,7 @@ pub(super) fn mark(host: Host, request: &mut HookRequest) {
 }
 
 /// Whether `host` would approve a call unseen, from what this process sees.
-pub(super) fn holds(host: Host) -> bool {
+pub(crate) fn holds(host: Host) -> bool {
     let Some(unseen) = &host.spec().reviews.unseen else {
         return false;
     };
