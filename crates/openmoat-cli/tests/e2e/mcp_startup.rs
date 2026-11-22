@@ -39,7 +39,14 @@ fn initialize() -> String {
 #[cfg(unix)]
 /// What follows `mcp proxy` for a server that creates `marker` when it runs.
 fn marking(marker: &Path) -> Vec<String> {
-    let script = format!("touch '{}'; cat >/dev/null", marker.display());
+    let response = json!({"jsonrpc": "2.0", "id": 1, "result": {
+        "protocolVersion": "2025-06-18", "capabilities": {},
+        "serverInfo": {"name": "marker", "version": "1"}}});
+    let script = format!(
+        "touch '{}'; while read -r line; do case \"$line\" in *'\"method\":\"initialize\"'*) printf '%s\\n' '{}' ;; esac; done",
+        marker.display(),
+        response,
+    );
     ["--server", "marker", "--", "sh", "-c", &script]
         .map(str::to_owned)
         .to_vec()
@@ -97,6 +104,9 @@ fn an_unaccepted_definition_never_starts_and_an_accepted_one_does() {
     let out = proxy(&sb, &line);
     assert_eq!(out.status.code(), Some(OK), "{}", text(&out));
     assert!(marker.exists(), "the accepted server started");
+    let answer: Value = serde_json::from_str(&stdout(&out)).unwrap();
+    assert_eq!(answer["id"], 1);
+    assert_eq!(answer["result"]["serverInfo"]["name"], "marker");
 }
 
 #[cfg(unix)]
