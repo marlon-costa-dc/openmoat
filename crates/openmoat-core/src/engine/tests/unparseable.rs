@@ -3,6 +3,19 @@
 
 use super::*;
 
+#[test]
+fn an_approved_unparseable_command_still_needs_review() {
+    let pattern = crate::literal_shell_pattern("sh -ee.a").unwrap();
+    let p = policy(&format!(
+        "version: 1\ndefaults: deny\nallow:\n  - id: approved\n    shell: [\"{pattern}\"]\n"
+    ));
+    let d = evaluate(&p, &ctx(), &shell("sh -ee.a")).unwrap();
+    assert_eq!(
+        (d.verdict, d.rules),
+        (Verdict::Review, vec!["unparseable".to_owned()])
+    );
+}
+
 /// Padding a line until the classifier stops cannot turn a deny into the
 /// default policy's `defer`: past the atom limit or the length limit the call
 /// needs review (`MAX_ATOMS`, `MAX_COMMAND_BYTES`).

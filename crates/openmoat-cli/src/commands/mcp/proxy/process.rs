@@ -7,19 +7,23 @@ use std::time::{Duration, Instant};
 
 use anyhow::{Context as _, Result, bail};
 
-#[cfg(unix)]
-#[path = "process/unix.rs"]
-mod platform;
 #[cfg(not(unix))]
-#[path = "process/other.rs"]
-mod platform;
+mod other;
+#[cfg(unix)]
+mod unix;
+
+#[cfg(not(unix))]
+use other as platform;
+#[cfg(unix)]
+use unix as platform;
 
 pub(super) use platform::own;
 
 const GRACE: Duration = Duration::from_secs(1);
+const REPLY_GRACE: Duration = Duration::from_secs(5);
 
 pub(super) enum Pump {
-    Host(Result<()>),
+    Host(Result<()>, bool),
     Server(Result<()>),
 }
 
@@ -38,11 +42,15 @@ fn drain(finished: &Receiver<Pump>) -> Result<()> {
         .recv()
         .context("MCP relay stopped without reporting its result")?;
     loop {
-        match next {
+        let pending_replies = match next {
             Pump::Server(result) => return result,
-            Pump::Host(result) => result?,
-        }
-        next = match finished.recv_timeout(GRACE) {
+            Pump::Host(result, pending_replies) => {
+                result?;
+                pending_replies
+            }
+        };
+        let grace = if pending_replies { REPLY_GRACE } else { GRACE };
+        next = match finished.recv_timeout(grace) {
             Ok(event) => event,
             Err(RecvTimeoutError::Timeout) => {
                 bail!("MCP server did not close its output after client EOF")
