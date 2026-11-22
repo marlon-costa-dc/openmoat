@@ -10,10 +10,8 @@ fn an_approved_unparseable_command_still_needs_review() {
         "version: 1\ndefaults: deny\nallow:\n  - id: approved\n    shell: [\"{pattern}\"]\n"
     ));
     let d = evaluate(&p, &ctx(), &shell("sh -ee.a")).unwrap();
-    assert_eq!(
-        (d.verdict, d.rules),
-        (Verdict::Review, vec!["unparseable".to_owned()])
-    );
+    assert_eq!(d.verdict, Verdict::Review);
+    assert_eq!(d.rules, ["unparseable"]);
 }
 
 /// Padding a line until the classifier stops cannot turn a deny into the

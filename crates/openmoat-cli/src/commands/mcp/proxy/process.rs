@@ -42,14 +42,13 @@ fn drain(finished: &Receiver<Pump>) -> Result<()> {
         .recv()
         .context("MCP relay stopped without reporting its result")?;
     loop {
-        let pending_replies = match next {
+        let grace = match next {
             Pump::Server(result) => return result,
             Pump::Host(result, pending_replies) => {
                 result?;
-                pending_replies
+                if pending_replies { REPLY_GRACE } else { GRACE }
             }
         };
-        let grace = if pending_replies { REPLY_GRACE } else { GRACE };
         next = match finished.recv_timeout(grace) {
             Ok(event) => event,
             Err(RecvTimeoutError::Timeout) => {

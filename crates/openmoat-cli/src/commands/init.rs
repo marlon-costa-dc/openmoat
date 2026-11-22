@@ -24,7 +24,6 @@ use crate::report::Style;
 use crate::sandbox::{self, Plan};
 
 mod ask;
-mod hosts;
 mod managed;
 pub(super) mod mcp;
 mod preview;
@@ -91,7 +90,7 @@ pub fn run(args: &InitArgs) -> Result<Code> {
     }
     // Asked before anything is written, so declining everything changes nothing
     // but OpenMoat's own state directory.
-    let hosts = hosts::choose(&home, args, &binary, &mut out)?;
+    let hosts = ask::choose(&home, args, &binary, &mut out)?;
 
     let mut steps = summary::Steps {
         update: state(&home, dry_run, unattended, snapshot.as_ref(), &mut detail)?,
