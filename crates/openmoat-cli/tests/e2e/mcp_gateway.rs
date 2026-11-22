@@ -8,23 +8,169 @@
 
 #![cfg(unix)]
 
-use std::io::{BufRead as _, BufReader, Write as _};
-use std::process::{Child, ChildStdin, Stdio};
-use std::sync::mpsc::{Receiver, channel};
+use std::path::{Path, PathBuf};
+use std::process::Output;
 use std::time::{Duration, Instant};
 
 use serde_json::{Value, json};
 
-use crate::common::{OK, USAGE, output, stdout, text};
+use crate::common::{OK, Sandbox, USAGE, output, stdout, text};
+use crate::hosts::dir_of;
 use openmoat_hosts::Host;
 
+mod attribution;
 mod flow;
-mod harness;
 mod injected;
+mod live;
 
-use harness::{Gateway, list};
+use live::Live;
 
 const FIXTURES: &str = include_str!("mcp_gateway/fixtures.json");
+
+/// Every place a reader may end a line (as in `src/mcp/relay/tests/gaps.rs`).
+const LINE_BREAKS: [char; 5] = ['\n', '\r', '\u{85}', '\u{2028}', '\u{2029}'];
+
+fn server_script() -> PathBuf {
+    Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/e2e/mcp_gateway/recording_server.py")
+}
+
+/// An installed home whose MCP server `docs` has had its tools accepted.
+struct Gateway {
+    sb: Sandbox,
+    record: PathBuf,
+    host: Option<&'static str>,
+}
+
+impl Gateway {
+    fn new() -> Self {
+        Self::for_host(None)
+    }
+
+    fn for_host(host: Option<&'static str>) -> Self {
+        let sb = Sandbox::installed(&[&dir_of(Host::ClaudeCode)]);
+        let record = sb.home.join("record.jsonl");
+        let gateway = Self { sb, record, host };
+        // `openmoat mcp proxy` starts only a definition a person accepted
+        // (ADR-049): one per mode, each starting the proxy as `docs`.
+        for mode in [
+            "answer", "silent", "rug", "inject", "fail", "instruct", "sample", "stubborn",
+        ] {
+            let line = gateway.proxy_line(mode);
+            let args: Vec<&str> = line.iter().map(String::as_str).collect();
+            gateway.sb.define_wrapped(&format!("docs-{mode}"), &args);
+        }
+        gateway.sb.accept_mcp();
+        let listed = gateway.session("answer", &[list(1)]);
+        assert!(
+            listed.contains(r#""tools":[]"#),
+            "a new server is held: {listed}"
+        );
+        let accepted = gateway.sb.moat_approving(&["mcp", "accept", "docs"]);
+        assert_eq!(accepted.status.code(), Some(OK), "{}", text(&accepted));
+        let listed = gateway.session("answer", &[list(1)]);
+        assert!(listed.contains("Accepted."), "{listed}");
+        gateway.forget();
+        gateway
+    }
+
+    /// What follows `mcp proxy` to start the server in `mode`.
+    fn proxy_line(&self, mode: &str) -> Vec<String> {
+        let script = server_script().to_string_lossy().into_owned();
+        let record = self.record.to_string_lossy().into_owned();
+        let mut args = vec!["--server", "docs"];
+        if let Some(host) = self.host {
+            args.extend(["--host", host]);
+        }
+        args.extend(["--", "python3", &script, &record, mode]);
+        args.into_iter().map(str::to_owned).collect()
+    }
+
+    fn proxy(&self, mode: &str) -> std::process::Command {
+        let mut command = self.sb.command();
+        command.args(["mcp", "proxy"]).args(self.proxy_line(mode));
+        command
+    }
+
+    /// One session: `lines` from the host, all at once; what the host got.
+    fn session(&self, mode: &str, lines: &[String]) -> String {
+        let out = self.run(mode, lines);
+        assert_eq!(out.status.code(), Some(OK), "{}", text(&out));
+        stdout(&out)
+    }
+
+    fn run(&self, mode: &str, lines: &[String]) -> Output {
+        let input: String = lines.iter().flat_map(|l| [l.as_str(), "\n"]).collect();
+        output(&mut self.proxy(mode), Some(&input))
+    }
+
+    /// What reached the server so far.
+    fn recorded(&self) -> String {
+        std::fs::read_to_string(&self.record).unwrap_or_default()
+    }
+
+    /// The messages that reached the server, each piece cut at every line
+    /// break and read as one whole message.
+    fn received(&self) -> Vec<Value> {
+        self.recorded()
+            .split(LINE_BREAKS)
+            .filter(|p| !p.trim().is_empty())
+            .map(|p| serde_json::from_str(p).unwrap_or_else(|e| panic!("{e}: {p:?}")))
+            .collect()
+    }
+
+    /// The tool calls that reached the server.
+    fn calls(&self) -> Vec<Value> {
+        self.received()
+            .into_iter()
+            .flat_map(|m| match m {
+                Value::Array(batch) => batch,
+                one => vec![one],
+            })
+            .filter(|m| m["method"] == "tools/call")
+            .collect()
+    }
+
+    fn forget(&self) {
+        let _ = std::fs::remove_file(&self.record);
+    }
+
+    /// The verdict `host`'s hook (Claude Code's or Codex's) gives
+    /// `mcp__docs__<tool>` with `arguments` in `session`.
+    fn hook(&self, host: &str, session: &str, tool: &str, arguments: &Value) -> String {
+        self.hook_in(host, session, tool, arguments, "default")
+    }
+
+    /// [`Gateway::hook`] in Claude Code permission mode `mode`.
+    fn hook_in(
+        &self,
+        host: &str,
+        session: &str,
+        tool: &str,
+        arguments: &Value,
+        mode: &str,
+    ) -> String {
+        let payload = json!({
+            "session_id": session, "cwd": self.sb.project().to_string_lossy(),
+            "hook_event_name": "PreToolUse", "tool_name": format!("mcp__docs__{tool}"),
+            "tool_input": arguments, "tool_use_id": format!("{session}-{tool}"),
+            "permission_mode": mode
+        });
+        let out = self.sb.guard(host, &payload.to_string());
+        let answer: Value = serde_json::from_str(stdout(&out).trim()).unwrap_or(Value::Null);
+        answer["hookSpecificOutput"]["permissionDecision"]
+            .as_str()
+            .unwrap_or(if out.status.code() == Some(2) {
+                "deny"
+            } else {
+                "defer"
+            })
+            .to_owned()
+    }
+}
+
+fn list(id: u64) -> String {
+    json!({"jsonrpc": "2.0", "id": id, "method": "tools/list"}).to_string()
+}
 
 fn call(id: u64, tool: &str, arguments: &Value) -> String {
     json!({"jsonrpc": "2.0", "id": id, "method": "tools/call",
@@ -88,106 +234,7 @@ fn an_upstream_that_exits_cleanly_without_a_reply_reports_failure() {
 
 #[test]
 fn attributed_codex_requests_reach_stdio_only_with_their_own_exact_ticket() {
-    let codex = Host::Codex.spec().id;
-    let gw = Gateway::for_host(Some(codex));
-    let policy_path = gw.sb.home.join(".moat/policy.yaml");
-    let policy = std::fs::read_to_string(&policy_path).unwrap();
-    assert!(policy.contains("\nallow:\n"));
-    std::fs::write(
-        &policy_path,
-        policy.replacen(
-            "\nallow:\n",
-            "\nallow:\n  - id: witness-search\n    mcp: [mcp__docs__search]\n",
-            1,
-        ),
-    )
-    .unwrap();
-    let accepted = gw.sb.moat_as_person(&["doctor", "--accept"]);
-    assert!(text(&accepted).contains("re-pinned"), "{}", text(&accepted));
-
-    let arguments = json!({"q": "same query"});
-    for session in ["thread-a", "thread-b"] {
-        let output = gw.sb.guard(
-            codex,
-            &json!({
-                "session_id": session, "cwd": gw.sb.project(),
-                "hook_event_name": "PreToolUse", "tool_name": "mcp__docs__search",
-                "tool_use_id": "same-call", "tool_input": arguments,
-            })
-            .to_string(),
-        );
-        assert_eq!(output.status.code(), Some(OK), "{}", text(&output));
-    }
-    let request = |id: u64, thread: &str, call_id: &str, args: &Value| {
-        json!({
-            "jsonrpc": "2.0", "id": id, "method": "tools/call",
-            "params": {"name": "search", "arguments": args,
-                "_meta": {"threadId": thread, "callId": call_id}}
-        })
-        .to_string()
-    };
-    // Induce a late audit failure in the isolated database, after the call's
-    // decision row can be written but before the guard can answer the host.
-    let fault = output(
-        std::process::Command::new("python3").args([
-            "-I",
-            "-c",
-            "import sqlite3, sys\nwith sqlite3.connect(sys.argv[1]) as db:\n db.execute(\"CREATE TRIGGER reject_run_link BEFORE INSERT ON events WHEN NEW.host = 'moat-run' BEGIN SELECT RAISE(ABORT, 'isolated audit write failure'); END\")",
-            gw.sb.home.join(".moat/audit.db").to_str().unwrap(),
-        ]),
-        None,
-    );
-    assert!(fault.status.success(), "{}", text(&fault));
-    let failed = output(
-        gw.sb
-            .command()
-            .env("MOAT_RUN_SESSION", "run-mcp-audit-test")
-            .args(["guard", "--host", codex]),
-        Some(
-            &json!({
-                "session_id": "thread-failed", "cwd": gw.sb.project(),
-                "hook_event_name": "PreToolUse", "tool_name": "mcp__docs__search",
-                "tool_use_id": "same-call", "tool_input": arguments,
-            })
-            .to_string(),
-        ),
-    );
-    assert_eq!(failed.status.code(), Some(2), "{}", text(&failed));
-    assert!(
-        text(&failed).contains("isolated audit write failure"),
-        "{}",
-        text(&failed)
-    );
-    let response = gw.session(
-        "answer",
-        &[
-            request(1, "thread-unseen", "same-call", &arguments),
-            request(2, "thread-b", "wrong-call", &arguments),
-            request(3, "thread-b", "same-call", &json!({"q": "changed"})),
-            request(4, "thread-b", "same-call", &arguments),
-            request(5, "thread-b", "same-call", &arguments),
-            request(6, "thread-a", "same-call", &arguments),
-            request(7, "thread-failed", "same-call", &arguments),
-        ],
-    );
-    for id in [1, 2, 3, 5, 7] {
-        assert_eq!(
-            answer(&response, id)["error"]["code"],
-            -32001,
-            "request {id} must be refused"
-        );
-    }
-    for id in [4, 6] {
-        assert_eq!(
-            answer(&response, id)["result"]["content"][0]["text"],
-            "called search"
-        );
-    }
-    let calls = gw.calls();
-    assert_eq!(
-        calls.iter().map(|v| v["id"].as_u64()).collect::<Vec<_>>(),
-        [Some(4), Some(6)]
-    );
+    attribution::assert_exact_codex_tickets();
 }
 
 #[test]
@@ -494,62 +541,5 @@ fn decide_like_a_host(gw: &Gateway, line: &str) {
                 gw.hook(Host::ClaudeCode.id(), "fixtures", "search", &arguments);
             }
         }
-    }
-}
-
-/// A proxy session driven a line at a time.
-struct Live {
-    child: Child,
-    stdin: Option<ChildStdin>,
-    lines: Receiver<String>,
-}
-
-impl Live {
-    fn start(gw: &Gateway, mode: &str) -> Self {
-        let mut child = gw
-            .proxy(mode)
-            .stdin(Stdio::piped())
-            .stdout(Stdio::piped())
-            .stderr(Stdio::inherit())
-            .spawn()
-            .unwrap();
-        let stdin = child.stdin.take();
-        let out = BufReader::new(child.stdout.take().unwrap());
-        let (tx, lines) = channel();
-        std::thread::spawn(move || {
-            for line in out.lines().map_while(Result::ok) {
-                if tx.send(line).is_err() {
-                    break;
-                }
-            }
-        });
-        Self {
-            child,
-            stdin,
-            lines,
-        }
-    }
-
-    /// Send `line` and wait for the answer to `id`.
-    fn ask(&mut self, line: &str, id: u64) -> Value {
-        let stdin = self.stdin.as_mut().unwrap();
-        writeln!(stdin, "{line}").unwrap();
-        stdin.flush().unwrap();
-        loop {
-            let got = self
-                .lines
-                .recv_timeout(Duration::from_secs(20))
-                .expect("an answer");
-            if let Ok(message) = serde_json::from_str::<Value>(&got)
-                && message["id"] == id
-            {
-                return message;
-            }
-        }
-    }
-
-    fn end(mut self) {
-        drop(self.stdin.take());
-        let _ = self.child.wait();
     }
 }

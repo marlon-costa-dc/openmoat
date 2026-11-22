@@ -8,15 +8,16 @@
 use std::io::Write as _;
 use std::path::{Path, PathBuf};
 
-use anyhow::Result;
+use anyhow::{Result, bail};
 use openmoat_core::{DEFAULT_POLICY, Policy};
 use openmoat_hosts::Host;
 use serde::Serialize;
 
 use crate::cli::{Format, InitArgs};
+use crate::environment::Snapshot;
 use crate::exit::Code;
 use crate::home::Home;
-use crate::install::{HookLayout, HostConfig, Outcome, Recorded, dir_variable, env_config_dir};
+use crate::install::{HookLayout, HostConfig, Outcome, Recorded};
 use crate::integrity;
 use crate::render::Deferred;
 use crate::report::Style;
@@ -27,7 +28,6 @@ mod managed;
 pub(super) mod mcp;
 mod preview;
 mod refuse;
-mod state;
 mod summary;
 #[cfg(test)]
 mod tests;
@@ -47,7 +47,7 @@ pub fn run(args: &InitArgs) -> Result<Code> {
     let home = Home::locate()?;
     let binary = crate::install::hook_binary()?;
     refuse_writable_binary(&home, &binary)?;
-    let snapshot = state::search_path(&home)?;
+    let snapshot = search_path(&home)?;
     let mut out = if json {
         Deferred::quiet()
     } else {
@@ -90,10 +90,10 @@ pub fn run(args: &InitArgs) -> Result<Code> {
     }
     // Asked before anything is written, so declining everything changes nothing
     // but OpenMoat's own state directory.
-    let hosts = choose_hosts(&home, args, &binary, &mut out)?;
+    let hosts = ask::choose(&home, args, &binary, &mut out)?;
 
     let mut steps = summary::Steps {
-        update: state::prepare(&home, dry_run, unattended, snapshot.as_ref(), &mut detail)?,
+        update: state(&home, dry_run, unattended, snapshot.as_ref(), &mut detail)?,
         ..summary::Steps::default()
     };
     if !dry_run {
@@ -343,6 +343,119 @@ fn repin_checks(lock_exists: bool, interactive: bool) -> RepinChecks {
     }
 }
 
+/// OpenMoat's own state: the directory, the default policy (kept when there is
+/// one), the audit log and the search-path snapshot `snapshot` (the recorded
+/// one kept when `unattended` or when [`search_path`] found nothing); the
+/// update a kept policy can take from this release's default.
+fn state(
+    home: &Home,
+    dry_run: bool,
+    unattended: bool,
+    snapshot: Option<&Snapshot>,
+    out: &mut Deferred,
+) -> Result<Option<String>> {
+    let prefix = if dry_run { "would" } else { "✔" };
+    if !dry_run {
+        home.ensure()?;
+    }
+    writeln!(out, "{prefix} state directory  {}", home.root().display())?;
+
+    let policy_path = home.policy_path();
+    let wrote_policy = if dry_run {
+        !policy_path.exists()
+    } else {
+        home.ensure_policy()?
+    };
+    let mut update = None;
+    if wrote_policy {
+        writeln!(
+            out,
+            "{prefix} policy           {} (defaults v1)",
+            policy_path.display()
+        )?;
+    } else {
+        writeln!(out, "✔ policy           {} (kept)", policy_path.display())?;
+        update = crate::upgrade::available(home);
+        if let Some(update) = &update {
+            writeln!(
+                out,
+                "! policy update    {update}: `openmoat policy upgrade` shows them and asks"
+            )?;
+        }
+    }
+
+    // The log and its key (ADR-101), so the first call is keyed.
+    let kept = if dry_run {
+        None
+    } else {
+        crate::audit_key::open(home)?
+    };
+    writeln!(
+        out,
+        "{prefix} audit log        {}",
+        home.audit_path().display()
+    )?;
+    if let Some(kept) = kept {
+        writeln!(
+            out,
+            "  a new audit log starts with a new audit key; the previous key is kept as {} \
+             (it still checks a log you moved aside)",
+            kept.display()
+        )?;
+    }
+
+    if dry_run {
+        writeln!(
+            out,
+            "would environment      {}",
+            home.environment_path().display()
+        )?;
+    } else if unattended && home.environment_path().is_file() {
+        writeln!(
+            out,
+            "· environment      {} kept: no person at a terminal to record a new search path",
+            home.environment_path().display()
+        )?;
+    } else if let Some(snapshot) = snapshot {
+        snapshot.save(&home.environment_path())?;
+        writeln!(
+            out,
+            "✔ environment      {} ({} dirs, {} programs pinned)",
+            home.environment_path().display(),
+            snapshot.path.len(),
+            snapshot.programs.len()
+        )?;
+    } else {
+        writeln!(
+            out,
+            "· environment      {} kept",
+            home.environment_path().display()
+        )?;
+    }
+    Ok(update)
+}
+
+/// This shell's search path, as `init` records it; `None` when it finds none
+/// of [`PINNED_PROGRAMS`](crate::environment::PINNED_PROGRAMS) (an empty or
+/// broken `PATH`, a service's bare environment) and a snapshot is recorded
+/// already, which is then kept. Without one it is refused: a snapshot that
+/// pins nothing would check no program the guard resolves, and `init` would
+/// say it succeeded.
+fn search_path(home: &Home) -> Result<Option<Snapshot>> {
+    let snapshot = Snapshot::capture();
+    if !snapshot.programs.is_empty() {
+        return Ok(Some(snapshot));
+    }
+    if home.environment_path().is_file() {
+        return Ok(None);
+    }
+    bail!(
+        "this shell's PATH finds none of the programs OpenMoat pins (sh, git, curl, …), so \
+         there is no search path to record and nothing was changed; run `openmoat init` from a \
+         normal shell"
+    )
+}
+
 /// The backups `init` made of `hosts`' files, and how to undo; how many.
 fn backups(home: &Home, hosts: &[Host], out: &mut Deferred) -> Result<usize> {
     let recorded = Recorded::load(home)?;
@@ -363,88 +476,6 @@ fn backups(home: &Home, hosts: &[Host], out: &mut Deferred) -> Result<usize> {
         writeln!(out, "✔ backups          {}", backups.join(", "))?;
     }
     Ok(backups.len())
-}
-
-/// The hosts to set up: `--hosts` as given; else every host found, each confirmed
-/// at the terminal (all of them with `--yes` or `--dry-run`, none without a
-/// terminal, so a script never changes an agent's files unasked).
-fn choose_hosts(
-    home: &Home,
-    args: &InitArgs,
-    binary: &std::path::Path,
-    out: &mut Deferred,
-) -> Result<Vec<Host>> {
-    if let Some(explicit) = &args.hosts {
-        return supported(explicit.iter().copied(), out);
-    }
-    let mut found = Vec::new();
-    for config in Host::ALL
-        .into_iter()
-        .filter_map(|h| HostConfig::for_init(home, h).ok())
-    {
-        if config.host_present() {
-            found.push(config);
-        } else if env_config_dir(config.host)?.is_some()
-            && crate::install::location::custom(config.host)
-                .is_none_or(openmoat_hosts::Locate::variables_are_the_hosts)
-        {
-            // The agent creates its directory on first start; say so instead of
-            // leaving it out silently. The directory is not created here.
-            let name = config.host.display_name();
-            writeln!(
-                out,
-                "· {name}: {} is {}, which does not exist yet; start {name} once to create \
-                 it, then run openmoat init again",
-                dir_variable(config.host)?.0,
-                config.dir().display()
-            )?;
-        }
-    }
-    let takes_hook = supported(found.iter().map(|c| c.host), out)?;
-    found.retain(|c| takes_hook.contains(&c.host));
-    let names: Vec<&str> = found.iter().map(|c| c.host.display_name()).collect();
-    if found.is_empty() {
-        writeln!(out, "· No agents found; pass --hosts to set one up")?;
-        return Ok(Vec::new());
-    }
-    if args.yes || args.dry_run {
-        return Ok(found.iter().map(|c| c.host).collect());
-    }
-    if !crate::terminal::interactive() {
-        writeln!(
-            out,
-            "! OpenMoat found {}; none changed without a terminal: run `openmoat init` \
-             in a terminal to choose, or `openmoat init --yes` to set up all of them",
-            names.join(", ")
-        )?;
-        return Ok(Vec::new());
-    }
-    // The sandbox settings the policy `init` keeps or installs gives each agent.
-    let plan = sandbox_plan(home, binary).ok();
-    let asking = ask::Asking {
-        plan: plan.as_ref(),
-        verbose: args.verbose,
-        every_agent: args.mcp.mcp_proxy,
-    };
-    let chosen = ask::ask(home, &found, binary, &asking, out)?;
-    if chosen.is_empty() {
-        writeln!(out, "· No agent accepted; no agent's files were changed")?;
-    }
-    Ok(chosen)
-}
-
-/// `hosts` but those whose version on the search path does not take OpenMoat's
-/// hook (OpenCode before 1.3.4), each named with why it is not set up: a hook it does not
-/// load would be pinned and reported as protecting nothing.
-fn supported(hosts: impl Iterator<Item = Host>, out: &mut Deferred) -> Result<Vec<Host>> {
-    let mut kept = Vec::new();
-    for host in hosts {
-        match crate::install::host_version::unsupported(host) {
-            Some(why) => writeln!(out, "· {:<16} not set up: {why}", host.display_name())?,
-            None => kept.push(host),
-        }
-    }
-    Ok(kept)
 }
 
 /// Every file `init` may change for `config`'s host: its hook file, its
