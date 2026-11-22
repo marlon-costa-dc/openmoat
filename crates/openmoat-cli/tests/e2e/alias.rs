@@ -98,7 +98,12 @@ fn moat_runs_the_same_command_as_openmoat() {
         person(&sb, &moat, &["init", "--yes"]).status.code(),
         Some(OK)
     );
-    assert_eq!(Path::new(&hook_command(&sb)), openmoat);
+    let recorded = PathBuf::from(hook_command(&sb));
+    assert_eq!(recorded.file_name(), openmoat.file_name());
+    assert_eq!(
+        fs::canonicalize(&recorded).unwrap(),
+        fs::canonicalize(&openmoat).unwrap()
+    );
 }
 
 #[test]

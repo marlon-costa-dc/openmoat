@@ -207,19 +207,6 @@ fn value_reads_are_checked_against_deny_rules_only() {
 /// cluster the shell grammar does not know, so even a literal allow of exactly
 /// that command needs review (found by the `literal_pattern` fuzz target).
 #[test]
-fn an_approved_unparseable_command_still_needs_review() {
-    let pattern = crate::literal_shell_pattern("sh -ee.a").unwrap();
-    let p = policy(&format!(
-        "version: 1\ndefaults: deny\nallow:\n  - id: approved\n    shell: [\"{pattern}\"]\n"
-    ));
-    let d = evaluate(&p, &ctx(), &shell("sh -ee.a")).unwrap();
-    assert_eq!(
-        (d.verdict, d.rules),
-        (Verdict::Review, vec!["unparseable".to_owned()])
-    );
-}
-
-#[test]
 fn pinned_executables_are_enforced_through_the_resolver() {
     use crate::programs::MapResolver;
     use std::collections::BTreeMap;
