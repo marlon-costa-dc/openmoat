@@ -1247,6 +1247,11 @@ What each module holds. The rules for each path are in `AGENTS.md` §2.
 | `scripts/smoke-real-agents.sh` | a person's check of the protections with their own Claude Code, Codex, Gemini CLI, pi and GitHub Copilot CLI in a throwaway home (CONTRIBUTING "Testing with real agents") |
 | `scripts/ci/latest-agents.sh`, `scripts/ci/latest-agents/` | the weekly check of each agent's latest release in a throwaway home; `agents.json`, generated from each host spec's `weekly` (`host/<module>/weekly.rs`, `tests/docs/weekly.rs`), records each agent's install, the release its adapter was checked against and its golden shell payload; `hosts/<agent>.sh` holds each record's own steps; `README.md` says what each agent's run proves |
 
+`commands/init/state.rs` prepares the state directory, policy, audit log and
+search path. `commands/mcp/proxy/process.rs` supervises upstream shutdown and
+selects the platform's process handling. The MCP gateway tests share the
+installed server fixture and hook helpers in `tests/e2e/mcp_gateway/harness.rs`.
+
 ## 11. Testing layers
 
 | Layer | Where | Runs |

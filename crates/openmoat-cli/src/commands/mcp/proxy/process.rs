@@ -7,12 +7,15 @@ use std::time::{Duration, Instant};
 
 use anyhow::{Context as _, Result, bail};
 
-#[cfg(unix)]
-#[path = "process/unix.rs"]
-mod platform;
 #[cfg(not(unix))]
-#[path = "process/other.rs"]
-mod platform;
+mod other;
+#[cfg(unix)]
+mod unix;
+
+#[cfg(not(unix))]
+use other as platform;
+#[cfg(unix)]
+use unix as platform;
 
 pub(super) use platform::own;
 
