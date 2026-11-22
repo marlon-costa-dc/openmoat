@@ -39,8 +39,6 @@ pub(super) fn choose(
             && crate::install::location::custom(config.host)
                 .is_none_or(openmoat_hosts::Locate::variables_are_the_hosts)
         {
-            // The agent creates its directory on first start; say so instead of
-            // leaving it out silently. The directory is not created here.
             let name = config.host.display_name();
             writeln!(
                 out,

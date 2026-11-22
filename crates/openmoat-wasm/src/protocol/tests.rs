@@ -42,7 +42,7 @@ fn compile_decide_paths_and_release() {
         ask(&format!(
             r#"{{"op":"decide","engine":{e},"action":{{"type":"fs_read","path":"~/.ssh/id_rsa"}}}}"#
         )),
-        r#"{"ok":{"verdict":"deny","rules":["secrets-paths"],"reasons":["secret material: read /h/.ssh/id_rsa"],"context":[]}}"#
+        r#"{"ok":{"verdict":"deny","rules":["secrets-paths"],"reasons":["secret material: read /h/.ssh/id_rsa [pattern `/h/.ssh/**`]"],"context":[]}}"#
     );
     assert_eq!(
         ask(&format!(
