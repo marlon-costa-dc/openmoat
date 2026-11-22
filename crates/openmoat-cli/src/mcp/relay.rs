@@ -217,7 +217,7 @@ impl Relay {
         self.state.lock().unwrap_or_else(PoisonError::into_inner)
     }
 
-    /// Whether an accepted request still needs a response at client EOF.
+    /// Whether an accepted host request still needs a response at client EOF.
     pub fn has_pending_replies(&self) -> bool {
         !self.state().pending.is_empty()
     }

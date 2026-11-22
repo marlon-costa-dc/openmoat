@@ -8,21 +8,22 @@
 
 #![cfg(unix)]
 
-use std::io::{BufRead as _, BufReader, Write as _};
 use std::path::{Path, PathBuf};
-use std::process::{Child, ChildStdin, Stdio};
-use std::sync::mpsc::{Receiver, channel};
+use std::process::Output;
 use std::time::{Duration, Instant};
 
 use serde_json::{Value, json};
 
-use crate::common::{OK, Sandbox, output, stdout, text};
+use crate::common::{OK, Sandbox, USAGE, output, stdout, text};
 use crate::hosts::dir_of;
 use openmoat_hosts::Host;
 
 mod attribution;
 mod flow;
 mod injected;
+mod live;
+
+use live::Live;
 
 const FIXTURES: &str = include_str!("mcp_gateway/fixtures.json");
 
@@ -92,10 +93,14 @@ impl Gateway {
 
     /// One session: `lines` from the host, all at once; what the host got.
     fn session(&self, mode: &str, lines: &[String]) -> String {
-        let input: String = lines.iter().flat_map(|l| [l.as_str(), "\n"]).collect();
-        let out = output(&mut self.proxy(mode), Some(&input));
+        let out = self.run(mode, lines);
         assert_eq!(out.status.code(), Some(OK), "{}", text(&out));
         stdout(&out)
+    }
+
+    fn run(&self, mode: &str, lines: &[String]) -> Output {
+        let input: String = lines.iter().flat_map(|l| [l.as_str(), "\n"]).collect();
+        output(&mut self.proxy(mode), Some(&input))
     }
 
     /// What reached the server so far.
@@ -216,6 +221,15 @@ fn closing_stdin_reaps_an_upstream_that_ignores_eof() {
         rustix::process::test_kill_process(pid),
         Err(rustix::io::Errno::SRCH)
     );
+}
+
+#[test]
+fn an_upstream_that_exits_cleanly_without_a_reply_reports_failure() {
+    let gateway = Gateway::new();
+    let out = gateway.run("silent", &[list(1)]);
+    assert_eq!(out.status.code(), Some(USAGE), "{}", text(&out));
+    assert!(text(&out).contains("closed its output with unanswered requests"));
+    assert_eq!(gateway.received()[0]["id"], 1);
 }
 
 #[test]
@@ -472,7 +486,14 @@ fn the_relay_fixtures_hold_through_the_binary() {
             decide_like_a_host(&gw, line);
         }
         gw.forget();
-        gw.session("silent", &lines);
+        let out = gw.run("silent", &lines);
+        assert!(
+            out.status.code() == Some(OK)
+                || (out.status.code() == Some(USAGE)
+                    && text(&out).contains("closed its output with unanswered requests")),
+            "{id}: {}",
+            text(&out)
+        );
         let received = gw.received();
         let recorded = gw.recorded();
         for call in gw.calls() {
@@ -520,62 +541,5 @@ fn decide_like_a_host(gw: &Gateway, line: &str) {
                 gw.hook(Host::ClaudeCode.id(), "fixtures", "search", &arguments);
             }
         }
-    }
-}
-
-/// A proxy session driven a line at a time.
-struct Live {
-    child: Child,
-    stdin: Option<ChildStdin>,
-    lines: Receiver<String>,
-}
-
-impl Live {
-    fn start(gw: &Gateway, mode: &str) -> Self {
-        let mut child = gw
-            .proxy(mode)
-            .stdin(Stdio::piped())
-            .stdout(Stdio::piped())
-            .stderr(Stdio::inherit())
-            .spawn()
-            .unwrap();
-        let stdin = child.stdin.take();
-        let out = BufReader::new(child.stdout.take().unwrap());
-        let (tx, lines) = channel();
-        std::thread::spawn(move || {
-            for line in out.lines().map_while(Result::ok) {
-                if tx.send(line).is_err() {
-                    break;
-                }
-            }
-        });
-        Self {
-            child,
-            stdin,
-            lines,
-        }
-    }
-
-    /// Send `line` and wait for the answer to `id`.
-    fn ask(&mut self, line: &str, id: u64) -> Value {
-        let stdin = self.stdin.as_mut().unwrap();
-        writeln!(stdin, "{line}").unwrap();
-        stdin.flush().unwrap();
-        loop {
-            let got = self
-                .lines
-                .recv_timeout(Duration::from_secs(20))
-                .expect("an answer");
-            if let Ok(message) = serde_json::from_str::<Value>(&got)
-                && message["id"] == id
-            {
-                return message;
-            }
-        }
-    }
-
-    fn end(mut self) {
-        drop(self.stdin.take());
-        let _ = self.child.wait();
     }
 }

@@ -23,28 +23,39 @@ const GRACE: Duration = Duration::from_secs(1);
 const REPLY_GRACE: Duration = Duration::from_secs(5);
 
 pub(super) enum Pump {
-    Host(Result<()>, bool),
-    Server(Result<()>),
+    Host {
+        result: Result<()>,
+        pending_replies: bool,
+    },
+    Server(Result<bool>),
 }
 
 /// Reap the upstream whether the byte pumps finish cleanly or time out.
 pub(super) fn supervise(mut child: Child, finished: &Receiver<Pump>) -> Result<ExitStatus> {
-    let result = drain(finished).and_then(|()| wait(&mut child));
+    let result = drain(finished)
+        .and_then(|pending_replies| wait(&mut child).map(|status| (status, pending_replies)));
     if result.is_err() {
         platform::stop(&mut child);
         child.wait().context("reaping the stopped MCP server")?;
     }
-    result
+    let (status, pending_replies) = result?;
+    if status.success() && pending_replies {
+        bail!("MCP server closed its output with unanswered requests");
+    }
+    Ok(status)
 }
 
-fn drain(finished: &Receiver<Pump>) -> Result<()> {
+fn drain(finished: &Receiver<Pump>) -> Result<bool> {
     let mut next = finished
         .recv()
         .context("MCP relay stopped without reporting its result")?;
     loop {
         let grace = match next {
             Pump::Server(result) => return result,
-            Pump::Host(result, pending_replies) => {
+            Pump::Host {
+                result,
+                pending_replies,
+            } => {
                 result?;
                 if pending_replies { REPLY_GRACE } else { GRACE }
             }

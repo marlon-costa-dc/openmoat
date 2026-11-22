@@ -366,7 +366,7 @@ fn doctor_accept_over_drift_removes_a_clear_value_and_succeeds() {
 }
 
 /// The stand-in server's command line after `mcp proxy`: it answers
-/// `tools/list` with what `MOAT_TEST_LISTING` holds, and nothing else.
+/// `tools/list` and `tools/call` with their respective fixture replies.
 #[cfg(unix)]
 const DOCS_SERVER: [&str; 6] = [
     "--server",
@@ -374,7 +374,10 @@ const DOCS_SERVER: [&str; 6] = [
     "--",
     "sh",
     "-c",
-    r#"while read -r line; do case "$line" in *tools/list*) printf '%s\n' "$MOAT_TEST_LISTING";; esac; done"#,
+    r#"while read -r line; do case "$line" in
+        *tools/list*) printf '%s\n' "$MOAT_TEST_LISTING";;
+        *tools/call*) printf '%s\n' "$MOAT_TEST_RESULT";;
+    esac; done"#,
 ];
 
 /// [`installed_with`] plus the stand-in server `docs`, its definition accepted.
@@ -386,17 +389,19 @@ fn installed_with_docs() -> Sandbox {
     sb
 }
 
-/// A stand-in stdio server: it answers `tools/list` with one tool described as
-/// `description`, and nothing else.
+/// A stand-in stdio server with one tool described as `description`.
 #[cfg(unix)]
 fn proxy_session(sb: &Sandbox, description: &str, input: &str) -> String {
     let response = json!({"jsonrpc": "2.0", "id": 1, "result": {"tools": [
         {"name": "search", "description": description, "inputSchema": {"type": "object"}}]}});
+    let result = json!({"jsonrpc": "2.0", "id": 2, "result": {
+        "content": [{"type": "text", "text": "Search completed."}]}});
     let out = output(
         sb.command()
             .args(["mcp", "proxy"])
             .args(DOCS_SERVER)
-            .env("MOAT_TEST_LISTING", response.to_string()),
+            .env("MOAT_TEST_LISTING", response.to_string())
+            .env("MOAT_TEST_RESULT", result.to_string()),
         Some(input),
     );
     assert_eq!(out.status.code(), Some(OK), "{}", text(&out));
@@ -503,5 +508,7 @@ fn the_proxy_holds_a_new_servers_tools_until_accepted() {
     let decided = mcp_call(&sb, &sb.project(), "mcp__docs__search");
     assert_eq!(decided.status.code(), Some(OK), "{}", text(&decided));
     let passed = proxy_session(&sb, evil, &call);
-    assert!(!passed.contains("error"), "{passed}");
+    let answer: Value = serde_json::from_str(&passed).unwrap();
+    assert_eq!(answer["id"], 2);
+    assert_eq!(answer["result"]["content"][0]["text"], "Search completed.");
 }
