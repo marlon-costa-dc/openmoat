@@ -20,7 +20,6 @@ mod hangs;
 mod heartbeat;
 mod home;
 mod install;
-mod installer;
 mod integrity;
 mod json5;
 mod key_file;

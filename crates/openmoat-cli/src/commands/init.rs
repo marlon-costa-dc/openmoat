@@ -18,7 +18,6 @@ use crate::environment::Snapshot;
 use crate::exit::Code;
 use crate::home::Home;
 use crate::install::{HookLayout, HostConfig, Outcome, Recorded};
-use crate::installer;
 use crate::integrity;
 use crate::render::Deferred;
 use crate::report::Style;
@@ -80,19 +79,12 @@ pub fn run(args: &InitArgs) -> Result<Code> {
     }
     // Whether a lock existed before this run; `repin` below always leaves one.
     let lock_existed = !dry_run && refuse_repin(&home, &mut out)?;
-    // The declared control plane installs the policy it rendered, in the same
-    // transaction that re-pins the hooks (ADR-104). A person may do the same
-    // at a terminal; every other agent is refused.
-    installer::install_declared_policy(&home, args.policy.as_deref(), dry_run, &mut detail)?;
     // No person over an existing lock: what the lock trusts stays (`unattended.rs`).
     // A person may run a binary the lock does not record yet: moving the hooks
     // to it is what `init` is for.
     let unattended =
         unattended::applies(lock_existed, crate::terminal::person_for("openmoat init"));
-    // The declared control plane installs an engine release, so moving the
-    // hooks to its binary is its job; every other unattended run keeps the
-    // recorded binary (ADR-104).
-    if unattended && !installer::authorized() {
+    if unattended {
         let recorded = crate::install::self_paths::recorded_binary(&home)?;
         unattended::refuse_other_binary(&recorded, &binary)?;
     }
@@ -344,10 +336,10 @@ struct RepinChecks {
 /// script, CI, or a process detached from the agent that started it) drift
 /// is refused too, while a person at a terminal re-pins over it as
 /// documented, shown what drifted.
-fn repin_checks(lock_exists: bool, interactive: bool, control_plane: bool) -> RepinChecks {
+fn repin_checks(lock_exists: bool, interactive: bool) -> RepinChecks {
     RepinChecks {
-        agent: lock_exists && !control_plane,
-        drift: lock_exists && !interactive && !control_plane,
+        agent: lock_exists,
+        drift: lock_exists && !interactive,
     }
 }
 

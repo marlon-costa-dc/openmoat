@@ -65,7 +65,7 @@ fn an_unattended_init_keeps_each_recorded_directory() {
 fn a_first_install_is_open_to_scripts_and_agents() {
     for interactive in [false, true] {
         assert_eq!(
-            repin_checks(false, interactive, false),
+            repin_checks(false, interactive),
             RepinChecks {
                 agent: false,
                 drift: false
@@ -77,30 +77,17 @@ fn a_first_install_is_open_to_scripts_and_agents() {
 #[test]
 fn a_re_pin_refuses_agents_and_without_a_terminal_drift() {
     assert_eq!(
-        repin_checks(true, false, false),
+        repin_checks(true, false),
         RepinChecks {
             agent: true,
             drift: true
         }
     );
     assert_eq!(
-        repin_checks(true, true, false),
+        repin_checks(true, true),
         RepinChecks {
             agent: true,
             drift: false
         }
     );
-}
-
-#[test]
-fn the_declared_control_plane_may_re_pin_over_drift() {
-    for interactive in [false, true] {
-        assert_eq!(
-            repin_checks(true, interactive, true),
-            RepinChecks {
-                agent: false,
-                drift: false
-            }
-        );
-    }
 }

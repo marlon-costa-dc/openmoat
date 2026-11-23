@@ -148,8 +148,7 @@ pub struct Synced {
 /// over a drifted lock, as `sync` is; one line per host to `out`.
 pub fn sync_checked(home: &Home, command: &str, out: &mut impl io::Write) -> Result<Synced> {
     crate::terminal::refuse_agent(command)?;
-    let control_plane = crate::installer::authorized_for(command);
-    if !crate::terminal::interactive() && !control_plane {
+    if !crate::terminal::interactive() {
         bail!("`{command}` must be run by a person in a terminal, not from a hook or script");
     }
     integrity::refuse_drift(home, "sync")?;
