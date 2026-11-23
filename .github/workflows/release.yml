@@ -28,10 +28,6 @@ permissions:
 
 env:
   CARGO_TERM_COLOR: always
-  # The declared local control plane (ADR-104). The release embeds its launcher
-  # path and SHA-256 so `init --policy`, `mcp accept` and `sandbox sync` can be
-  # administered without a terminal. Empty disables the capability.
-  OPENMOAT_INSTALLER_ANCHOR: ${{ vars.OPENMOAT_INSTALLER_ANCHOR }}
 
 jobs:
   plan:

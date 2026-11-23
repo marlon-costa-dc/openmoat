@@ -20,11 +20,7 @@ use crate::sandbox::Plan;
 pub(super) fn refuse_repin(home: &Home, out: &mut Deferred) -> Result<bool> {
     let lock_path = home.lock_path();
     let lock_exists = lock_path.exists();
-    let checks = repin_checks(
-        lock_exists,
-        crate::terminal::interactive(),
-        super::super::super::installer::authorized(),
-    );
+    let checks = repin_checks(lock_exists, crate::terminal::interactive());
     let drift: Vec<String> = if lock_exists {
         integrity::Lock::load(&lock_path).map_or_else(
             |error| vec![format!("{} cannot be read: {error:#}", lock_path.display())],
