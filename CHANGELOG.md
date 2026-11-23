@@ -8,6 +8,14 @@ view at the end of the file.
 
 ## [Unreleased]
 
+## [0.24.0-dc4] - 2026-11-23
+
+### Added
+- The published release embeds `OPENMOAT_INSTALLER_ANCHOR` — the launcher path and SHA-256 of the local control plane — and accepts `init --policy`, `mcp accept` and `sandbox sync` from that caller alone, so a host policy can be installed without a person at a terminal and every other process stays refused ([#15](https://github.com/marlon-costa-dc/openmoat/pull/15)).
+
+### Changed
+- A `-dc` release skips the upstream registry publishers (crates.io, npm, Homebrew): those trusted-publishing identities belong to the upstream repository, so a fork release run is green and its verdict means what it says ([#16](https://github.com/marlon-costa-dc/openmoat/pull/16)).
+
 ## [0.24.0-dc3] - 2026-11-21
 
 ### Fixed
@@ -1400,6 +1408,7 @@ First beta and first release that is not a GitHub pre-release.
 
 [Unreleased]: https://github.com/crocodile-labs/openmoat/compare/v0.24.0...HEAD
 [0.24.0-dc3]: https://github.com/marlon-costa-dc/openmoat/compare/v0.24.0-dc2...v0.24.0-dc3
+[0.24.0-dc4]: https://github.com/marlon-costa-dc/openmoat/compare/v0.24.0-dc3...v0.24.0-dc4
 [0.24.0]: https://github.com/crocodile-labs/openmoat/compare/v0.23.1...v0.24.0
 [0.23.1]: https://github.com/crocodile-labs/openmoat/compare/v0.23.0...v0.23.1
 [0.23.0]: https://github.com/crocodile-labs/openmoat/compare/v0.22.1...v0.23.0
