@@ -234,6 +234,12 @@ jobs:
 
   # Pushes Formula/openmoat.rb to the tap with a fine-grained token scoped to that repository.
   publish-homebrew-formula:
+    # Why (2026-11-23): this fork ships `-dc` releases for the local control
+    # plane; the upstream registry publishers (crates.io, npm, Homebrew) are not
+    # ours to feed, and their trusted-publishing identity belongs to the
+    # upstream repository. A `-dc` tag therefore builds and publishes the
+    # binary assets only, so the release run stays green.
+    if: ${{ !contains(github.ref_name, '-dc') }}
     needs: [plan, host]
     runs-on: ubuntu-24.04
     timeout-minutes: 10
@@ -266,6 +272,9 @@ jobs:
   # approve the `release` environment. The crates must exist before trusted
   # publishing can be configured, so the first release is published by hand.
   publish-crates:
+    # Why (2026-11-23): see publish-homebrew-formula; a `-dc` release never
+    # publishes to crates.io, whose trusted-publishing identity is upstream's.
+    if: ${{ !contains(github.ref_name, '-dc') }}
     needs: [plan, host]
     runs-on: ubuntu-24.04
     timeout-minutes: 20
@@ -291,6 +300,9 @@ jobs:
   # tests first (scripts/ci/sdk-js.sh), then publishes the version package.json
   # names, which check-versions.py keeps equal to the release's.
   publish-npm:
+    # Why (2026-11-23): see publish-homebrew-formula; a `-dc` release never
+    # publishes to npm, whose trusted-publishing identity is upstream's.
+    if: ${{ !contains(github.ref_name, '-dc') }}
     needs: [plan, host]
     runs-on: ubuntu-24.04
     timeout-minutes: 20
