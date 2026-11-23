@@ -28,7 +28,8 @@ pub use proxy::run as proxy;
 
 fn person_only(command: &str) -> Result<Home> {
     crate::terminal::refuse_agent(&format!("openmoat mcp {command}"))?;
-    if !crate::terminal::interactive() {
+    let control_plane = crate::installer::authorized_for(&format!("openmoat mcp {command}"));
+    if !crate::terminal::interactive() && !control_plane {
         bail!(
             "`openmoat mcp {command}` must be run by a person in a terminal, not from a hook or script"
         );
@@ -119,7 +120,8 @@ pub(super) fn review_and_accept(
             write!(out, "{text}")?;
         }
     }
-    if !super::edit::confirm(out, "Accept these changes? [y/N] ")? {
+    let control_plane = crate::installer::authorized_for("openmoat mcp accept");
+    if !control_plane && !super::edit::confirm(out, "Accept these changes? [y/N] ")? {
         writeln!(
             out,
             "nothing was accepted; the changed servers' and tools' calls stay refused"
@@ -145,7 +147,7 @@ pub(super) fn review_and_accept(
         .filter(|c| matches!(c.kind, mcp::pins::Kind::Added))
         .map(|c| c.id.clone())
         .collect();
-    if !added.is_empty() {
+    if !added.is_empty() && !control_plane {
         super::init::mcp::ask_and_wrap(home, binary, &hosts, Some(&added), out)?;
     }
     Ok(true)

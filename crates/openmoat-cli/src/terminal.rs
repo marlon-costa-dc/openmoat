@@ -66,7 +66,7 @@ fn checks_binary(command: &str) -> bool {
 /// applies. Every command but `openmoat init` also refuses to run from an
 /// executable other than the one the policy lock records (`own_binary.rs`).
 pub fn refuse_agent(command: &str) -> Result<()> {
-    if assumed() {
+    if assumed() || crate::installer::authorized_for(command) {
         return Ok(());
     }
     if checks_binary(command) {

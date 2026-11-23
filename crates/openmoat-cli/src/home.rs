@@ -223,6 +223,24 @@ impl Home {
         Ok(true)
     }
 
+    /// Install a validated policy as the person's policy, keeping the prior
+    /// bytes beside it. Returns whether the file changed; the base a
+    /// `policy upgrade` merges from is left untouched, so the edits installed
+    /// here stay "ours" in the three-way merge (ADR-104).
+    pub fn install_policy(&self, bytes: &[u8]) -> Result<bool> {
+        let path = self.policy_path();
+        if let Ok(current) = fs::read(&path) {
+            if current == bytes {
+                return Ok(false);
+            }
+            let digest = crate::integrity::sha256_hex(&current);
+            let backup = path.with_file_name(format!("policy.yaml.aihub-prior-{}", &digest[..16]));
+            write_private(&backup, &current)?;
+        }
+        write_private(&path, bytes)?;
+        Ok(true)
+    }
+
     /// Load and lint the installed user policy, with `moat allow` rules merged
     /// in; from the bytes the lock check kept when it kept them.
     pub fn load_policy(&self) -> Result<Policy> {
