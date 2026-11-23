@@ -209,6 +209,13 @@ pub struct InitArgs {
     #[arg(long, short = 'y')]
     pub yes: bool,
 
+    /// Install this policy file as the person's policy in the same transaction
+    /// that writes the hooks. A person at a terminal, or the control plane the
+    /// release was built for (`OPENMOAT_INSTALLER_ANCHOR`); every other agent
+    /// is refused.
+    #[arg(long, value_name = "FILE")]
+    pub policy: Option<PathBuf>,
+
     /// Print what would change without writing anything.
     #[arg(long)]
     pub dry_run: bool,
