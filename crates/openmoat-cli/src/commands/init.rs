@@ -8,7 +8,7 @@
 use std::io::Write as _;
 use std::path::{Path, PathBuf};
 
-use anyhow::{Context, Result, bail};
+use anyhow::{Result, bail};
 use openmoat_core::{DEFAULT_POLICY, Policy};
 use openmoat_hosts::Host;
 use serde::Serialize;
@@ -83,34 +83,7 @@ pub fn run(args: &InitArgs) -> Result<Code> {
     // The declared control plane installs the policy it rendered, in the same
     // transaction that re-pins the hooks (ADR-104). A person may do the same
     // at a terminal; every other agent is refused.
-    if let Some(file) = args.policy.as_deref()
-        && !dry_run
-    {
-        if !installer::authorized() && !crate::terminal::interactive() {
-            bail!(
-                "`openmoat init --policy` must be run by the control plane this \
-                 release was built for, or by a person at a terminal"
-            );
-        }
-        let bytes =
-            std::fs::read(file).with_context(|| format!("reading policy {}", file.display()))?;
-        let text = std::str::from_utf8(&bytes)
-            .with_context(|| format!("policy {} is not UTF-8", file.display()))?;
-        Policy::parse(text).with_context(|| format!("policy {} does not lint", file.display()))?;
-        if home.install_policy(&bytes)? {
-            writeln!(
-                detail,
-                "✔ policy           {} (installed)",
-                home.policy_path().display()
-            )?;
-        } else {
-            writeln!(
-                detail,
-                "✔ policy           {} (unchanged)",
-                home.policy_path().display()
-            )?;
-        }
-    }
+    installer::install_declared_policy(&home, args.policy.as_deref(), dry_run, &mut detail)?;
     // No person over an existing lock: what the lock trusts stays (`unattended.rs`).
     // A person may run a binary the lock does not record yet: moving the hooks
     // to it is what `init` is for.

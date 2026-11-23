@@ -69,6 +69,62 @@ const LIFECYCLE: &[&str] = &[
     "openmoat sandbox sync",
 ];
 
+/// Install the policy `init` declares, if any, unless this is a dry run.
+pub(crate) fn install_declared_policy(
+    home: &crate::home::Home,
+    file: Option<&std::path::Path>,
+    dry_run: bool,
+    detail: &mut crate::render::Deferred,
+) -> anyhow::Result<()> {
+    if let Some(file) = file
+        && !dry_run
+    {
+        apply_policy(home, file, detail)?;
+    }
+    Ok(())
+}
+
+/// Install one policy file the control plane rendered, in the transaction that
+/// writes the hooks. A person at a terminal may do the same; every other agent
+/// is refused. `policy.base.yaml` is never touched, so `policy upgrade` keeps
+/// these edits as "ours" in the three-way merge.
+pub(crate) fn apply_policy(
+    home: &crate::home::Home,
+    file: &std::path::Path,
+    detail: &mut crate::render::Deferred,
+) -> anyhow::Result<()> {
+    use std::io::Write as _;
+
+    use anyhow::{Context, bail};
+
+    if !authorized() && !crate::terminal::interactive() {
+        bail!(
+            "`openmoat init --policy` must be run by the control plane this \
+             release was built for, or by a person at a terminal"
+        );
+    }
+    let bytes =
+        std::fs::read(file).with_context(|| format!("reading policy {}", file.display()))?;
+    let text = std::str::from_utf8(&bytes)
+        .with_context(|| format!("policy {} is not UTF-8", file.display()))?;
+    openmoat_core::Policy::parse(text)
+        .with_context(|| format!("policy {} does not lint", file.display()))?;
+    if home.install_policy(&bytes)? {
+        writeln!(
+            detail,
+            "✔ policy           {} (installed)",
+            home.policy_path().display()
+        )?;
+    } else {
+        writeln!(
+            detail,
+            "✔ policy           {} (unchanged)",
+            home.policy_path().display()
+        )?;
+    }
+    Ok(())
+}
+
 /// Whether the declared control plane may run `command` unattended.
 pub(crate) fn authorized_for(command: &str) -> bool {
     !command.contains("--managed")
