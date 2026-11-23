@@ -8,7 +8,7 @@
 use std::io::Write as _;
 use std::path::{Path, PathBuf};
 
-use anyhow::{Result, bail};
+use anyhow::{Context, Result, bail};
 use openmoat_core::{DEFAULT_POLICY, Policy};
 use openmoat_hosts::Host;
 use serde::Serialize;
@@ -18,6 +18,7 @@ use crate::environment::Snapshot;
 use crate::exit::Code;
 use crate::home::Home;
 use crate::install::{HookLayout, HostConfig, Outcome, Recorded};
+use crate::installer;
 use crate::integrity;
 use crate::render::Deferred;
 use crate::report::Style;
@@ -79,12 +80,47 @@ pub fn run(args: &InitArgs) -> Result<Code> {
     }
     // Whether a lock existed before this run; `repin` below always leaves one.
     let lock_existed = !dry_run && refuse_repin(&home, &mut out)?;
+    // The declared control plane installs the policy it rendered, in the same
+    // transaction that re-pins the hooks (ADR-104). A person may do the same
+    // at a terminal; every other agent is refused.
+    if let Some(file) = args.policy.as_deref() {
+        if !dry_run {
+            if !installer::authorized() && !crate::terminal::interactive() {
+                bail!(
+                    "`openmoat init --policy` must be run by the control plane this \
+                     release was built for, or by a person at a terminal"
+                );
+            }
+            let bytes = std::fs::read(file)
+                .with_context(|| format!("reading policy {}", file.display()))?;
+            let text = std::str::from_utf8(&bytes)
+                .with_context(|| format!("policy {} is not UTF-8", file.display()))?;
+            Policy::parse(text)
+                .with_context(|| format!("policy {} does not lint", file.display()))?;
+            if home.install_policy(&bytes)? {
+                writeln!(
+                    detail,
+                    "✔ policy           {} (installed)",
+                    home.policy_path().display()
+                )?;
+            } else {
+                writeln!(
+                    detail,
+                    "✔ policy           {} (unchanged)",
+                    home.policy_path().display()
+                )?;
+            }
+        }
+    }
     // No person over an existing lock: what the lock trusts stays (`unattended.rs`).
     // A person may run a binary the lock does not record yet: moving the hooks
     // to it is what `init` is for.
     let unattended =
         unattended::applies(lock_existed, crate::terminal::person_for("openmoat init"));
-    if unattended {
+    // The declared control plane installs an engine release, so moving the
+    // hooks to its binary is its job; every other unattended run keeps the
+    // recorded binary (ADR-104).
+    if unattended && !installer::authorized() {
         let recorded = crate::install::self_paths::recorded_binary(&home)?;
         unattended::refuse_other_binary(&recorded, &binary)?;
     }
@@ -336,10 +372,10 @@ struct RepinChecks {
 /// script, CI, or a process detached from the agent that started it) drift
 /// is refused too, while a person at a terminal re-pins over it as
 /// documented, shown what drifted.
-fn repin_checks(lock_exists: bool, interactive: bool) -> RepinChecks {
+fn repin_checks(lock_exists: bool, interactive: bool, control_plane: bool) -> RepinChecks {
     RepinChecks {
-        agent: lock_exists,
-        drift: lock_exists && !interactive,
+        agent: lock_exists && !control_plane,
+        drift: lock_exists && !interactive && !control_plane,
     }
 }
 
