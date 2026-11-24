@@ -487,7 +487,23 @@ impl CompiledPolicy<'_> {
         let atoms = packages::on_hand(atoms, &self.ctx, resolver);
         let pins = atoms.iter().filter_map(|atom| match atom {
             AtomicAction::Shell { argv } => {
-                programs::check(&argv[0], &self.policy.executables, resolver)
+                // Why: a path-invoked program is written relative to the
+                // call's own directory (`.venv/bin/python`), while a pin
+                // records an absolute path. Resolve it here, through the
+                // context the rest of the decision uses, so the identity
+                // check below compares two absolute spellings.
+                let written = &argv[0];
+                let program = if written.contains('/') || written.contains('\\') {
+                    crate::paths::normalise(
+                        written,
+                        &self.ctx.home,
+                        self.ctx.project.as_deref(),
+                        &self.ctx.cwd,
+                    )
+                } else {
+                    written.clone()
+                };
+                programs::check(&program, &self.policy.executables, resolver)
             }
             _ => None,
         });

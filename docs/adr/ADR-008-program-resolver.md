@@ -36,3 +36,21 @@ an architecture test.
 - Known gaps (audit 2026-10-05): an empty `PATH` at init pins nothing and still reports
   success; on Windows only `.exe`, `.cmd` and `.bat` are tried, `PATHEXT` is ignored.
 - Core purity holds; the only filesystem code is `crates/moat-cli/src/environment.rs`.
+
+## Amendment 2026-11-24 — a pin names a file, not a spelling
+
+- `ProgramResolver` gains `same_file(a, b)`, defaulting to string equality so callers
+  without a filesystem (tests, `wasm32`) stay sound. The CLI implements it with the
+  file's device and inode, or the canonical paths where the platform has neither.
+  `programs::check` accepts any path that names the pinned file, so a distribution's
+  hardlink (`/usr/bin/git` and `/usr/sbin/git` are one inode) and a project's virtualenv
+  symlink to the recorded interpreter pass, while a planted copy is still denied.
+- A path-invoked program is resolved against the call's own working directory through
+  `paths::normalise` before the comparison, so `.venv/bin/python` is compared as the
+  absolute file it runs.
+- `openmoat environment refresh` records the process's search path as the machine's
+  snapshot and re-pins the lock, under the same anchored-control-plane or person gate as
+  `init --policy`. It exists because `init` without a terminal keeps an existing
+  snapshot: one recorded from a project's virtualenv used to outlive every deploy and
+  deny every other project's interpreter.
+

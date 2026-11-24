@@ -8,6 +8,15 @@ view at the end of the file.
 
 ## [Unreleased]
 
+## [0.24.0-dc5] - 2026-11-24
+
+### Added
+- `openmoat environment refresh` records this process's search path as the machine's snapshot and re-pins the lock, under the same anchored-control-plane or person gate as `init --policy`. A deploy can now heal a stale snapshot without a terminal.
+
+### Fixed
+- A program pin matches the file it names, not one spelling: a distribution's hardlink (`/usr/bin/git` and `/usr/sbin/git` are one inode) and a project's virtualenv link to the recorded interpreter pass, while a planted copy is still denied.
+- A linked worktree with no `.moat/policy.yaml` of its own reads the main checkout's, so the repository's rules apply where its agents work.
+
 ## [0.24.0-dc4] - 2026-11-23
 
 ### Added
@@ -1409,6 +1418,7 @@ First beta and first release that is not a GitHub pre-release.
 [Unreleased]: https://github.com/crocodile-labs/openmoat/compare/v0.24.0...HEAD
 [0.24.0-dc3]: https://github.com/marlon-costa-dc/openmoat/compare/v0.24.0-dc2...v0.24.0-dc3
 [0.24.0-dc4]: https://github.com/marlon-costa-dc/openmoat/compare/v0.24.0-dc3...v0.24.0-dc4
+[0.24.0-dc5]: https://github.com/marlon-costa-dc/openmoat/compare/v0.24.0-dc4...v0.24.0-dc5
 [0.24.0]: https://github.com/crocodile-labs/openmoat/compare/v0.23.1...v0.24.0
 [0.23.1]: https://github.com/crocodile-labs/openmoat/compare/v0.23.0...v0.23.1
 [0.23.0]: https://github.com/crocodile-labs/openmoat/compare/v0.22.1...v0.23.0

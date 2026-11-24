@@ -132,6 +132,9 @@ pub enum Command {
     /// Lightweight tier (`--no-isolate`, or no bubblewrap), files inside the project
     /// (`.env`, `.git`, `.moat`) are not protected.
     Run(RunArgs),
+    /// Record the machine's search path that program pins resolve through, and
+    /// re-pin the lock. The declared control plane, or a person at a terminal.
+    Environment(EnvironmentArgs),
     /// Take a snapshot of the project's files into OpenMoat's own store, list the
     /// snapshots (`--list`) or remove old ones (`--prune`). `openmoat run` takes one
     /// before the agent starts and one after it exits. Refused when an agent started it.
@@ -441,6 +444,18 @@ pub struct TrustArgs {
     /// Withdraw the trust instead: the repository policy only tightens again.
     #[arg(long)]
     pub revoke: bool,
+}
+
+#[derive(Debug, Args)]
+pub struct EnvironmentArgs {
+    #[command(subcommand)]
+    pub command: EnvironmentCommand,
+}
+
+#[derive(Debug, Subcommand)]
+pub enum EnvironmentCommand {
+    /// Record this process's search path as the machine's snapshot and re-pin the lock.
+    Refresh,
 }
 
 #[derive(Debug, Args)]
