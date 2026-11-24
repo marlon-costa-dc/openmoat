@@ -101,6 +101,12 @@ fn a_linked_worktree_reads_the_main_worktrees_policy() {
     let found = find(&home, &worktree)
         .unwrap()
         .expect("main worktree policy");
-    assert_eq!(found.path, main.join(home::DIR_NAME).join("policy.yaml"));
+    // `find` resolves the main root (macOS `/var` → `/private/var`, Windows
+    // verbatim paths), so the expected path is the canonical one.
+    let canonical_main = fs::canonicalize(&main).unwrap();
+    assert_eq!(
+        found.path,
+        canonical_main.join(home::DIR_NAME).join("policy.yaml"),
+    );
     assert_eq!(found.root, root_key(&main).unwrap());
 }
