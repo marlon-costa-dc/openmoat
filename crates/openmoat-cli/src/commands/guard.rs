@@ -419,7 +419,8 @@ fn evaluate(
         snapshot: &snapshot,
         binary: &verified.lock.binary,
     };
-    let decision = compiled.decide_with(action, &programs, &FsPathResolver);
+    let decision =
+        compiled.decide_with_projects(action, &programs, &FsPathResolver, &context::Projects);
     // A write that leaves a project settings file turning its host's hook off;
     // only tightens, and before the grant, which cannot lift a deny.
     let decision = crate::project_settings::written::checked(&home, &request, &ctx, decision);

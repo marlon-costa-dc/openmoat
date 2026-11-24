@@ -482,27 +482,60 @@ impl CompiledPolicy<'_> {
         resolver: &dyn ProgramResolver,
         paths: &dyn PathResolver,
     ) -> Decision {
+        self.decide_with_projects(action, resolver, paths, &crate::programs::NoProjects)
+    }
+
+    /// [`Self::decide_with`] with the project roots a caller can resolve.
+    ///
+    /// Why: a program the project vendors is the project's choice, and only
+    /// the caller knows where the project root is (the core never touches the
+    /// filesystem). A bare name, or a path outside the root, still meets its
+    /// pin.
+    #[must_use]
+    pub fn decide_with_projects(
+        &self,
+        action: &Action,
+        resolver: &dyn ProgramResolver,
+        paths: &dyn PathResolver,
+        projects: &dyn crate::programs::ProjectResolver,
+    ) -> Decision {
         let (atoms, unparsed) = self.all_atoms(action, paths);
         // a runner's package the project installed or declared (ADR-102)
         let atoms = packages::on_hand(atoms, &self.ctx, resolver);
+        let mut cwd = self.ctx.cwd.clone();
         let pins = atoms.iter().filter_map(|atom| match atom {
             AtomicAction::Shell { argv } => {
                 // Why: a path-invoked program is written relative to the
-                // call's own directory (`.venv/bin/python`), while a pin
-                // records an absolute path. Resolve it here, through the
-                // context the rest of the decision uses, so the identity
-                // check below compares two absolute spellings.
+                // directory the shell is in when it runs, and one command
+                // line may move there first (`cd repo && .venv/bin/python`).
+                // Follow a leading `cd` so the identity check below compares
+                // the file that actually runs, not the call's starting
+                // directory.
+                if let Some(next) = cd_target(argv, &self.ctx, &cwd) {
+                    cwd = next;
+                }
                 let written = &argv[0];
                 let program = if written.contains('/') || written.contains('\\') {
                     crate::paths::normalise(
                         written,
                         &self.ctx.home,
                         self.ctx.project.as_deref(),
-                        &self.ctx.cwd,
+                        &cwd,
                     )
                 } else {
                     written.clone()
                 };
+                // Why (operator 2026-11-24): a program the project itself
+                // vendors — a virtualenv's interpreter, `node_modules/.bin` —
+                // is the project's choice, like the package runner ADR-102
+                // already trusts inside it. Only the resolved project root
+                // exempts it; a bare name, or a path outside that root, still
+                // meets the pin.
+                let under =
+                    |root: &str| program == root || program.starts_with(&format!("{root}/"));
+                if projects.root_of(&cwd).as_deref().is_some_and(under) {
+                    return None;
+                }
                 programs::check(&program, &self.policy.executables, resolver)
             }
             _ => None,
@@ -576,6 +609,27 @@ impl CompiledPolicy<'_> {
             })
             .unwrap_or_else(|| unparseable(verdict, "action has no evaluable parts".to_owned()))
     }
+}
+
+/// The directory a plain `cd <word>` moves to, resolved against `cwd`; `None`
+/// for any other command, `cd -`, or `cd` with no word.
+///
+/// Why: a program named by a relative path runs in the directory the shell is
+/// in at that moment, and one command line may move there first.
+fn cd_target(argv: &[String], ctx: &EvalContext, cwd: &str) -> Option<String> {
+    if argv.first().map(String::as_str) != Some("cd") {
+        return None;
+    }
+    let word = argv.get(1)?;
+    if word.starts_with('-') {
+        return None;
+    }
+    Some(crate::paths::normalise(
+        word,
+        &ctx.home,
+        ctx.project.as_deref(),
+        cwd,
+    ))
 }
 
 /// Input that cannot be classified: the policy's catch-all, never `allow` (ADR-025).

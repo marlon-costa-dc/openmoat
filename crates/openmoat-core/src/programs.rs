@@ -13,6 +13,26 @@ use crate::packages::Ecosystem;
 use crate::rule_id::EXECUTABLES as RULE;
 use crate::verdict::{Decision, Verdict};
 
+/// Resolves the project root a directory belongs to.
+///
+/// The core never touches the filesystem: the CLI answers with the git root
+/// above a directory, so a program the project vendors is recognized as the
+/// project's choice rather than a search-path hijack.
+pub trait ProjectResolver {
+    /// The trusted project root above `dir`, when it has one.
+    fn root_of(&self, dir: &str) -> Option<String>;
+}
+
+/// Resolver for callers without a project (tests, `wasm32`): nothing is exempt.
+#[derive(Debug, Default, Clone, Copy)]
+pub struct NoProjects;
+
+impl ProjectResolver for NoProjects {
+    fn root_of(&self, _dir: &str) -> Option<String> {
+        None
+    }
+}
+
 /// Resolves program names using a search path the kernel controls.
 pub trait ProgramResolver {
     /// Absolute path `program` would run from, or `None` if it is not found.

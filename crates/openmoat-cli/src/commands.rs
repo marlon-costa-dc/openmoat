@@ -8,7 +8,6 @@ mod bench;
 mod demo;
 mod doctor;
 mod edit;
-mod environment;
 pub(crate) mod guard;
 mod init;
 mod mcp;
@@ -54,7 +53,6 @@ pub fn run(cli: Cli) -> Result<Code> {
     };
     match command {
         Command::Init(args) => init::run(&args),
-        Command::Environment(args) => environment::run(&args),
         Command::Uninstall(args) => uninstall::run(&args),
         Command::Guard(args) => Ok(guard::run(&args)),
         Command::Show(args) => show::run(&args),

@@ -11,10 +11,10 @@ view at the end of the file.
 ## [0.24.0-dc5] - 2026-11-24
 
 ### Added
-- `openmoat environment refresh` records this process's search path as the machine's snapshot and re-pins the lock, under the same anchored-control-plane or person gate as `init --policy`. A deploy can now heal a stale snapshot without a terminal.
+- The anchored `init` records the PATH the control plane renders as the machine's snapshot in the same transaction that installs the policy and pins the lock, and its plan reports the snapshot as changed when it differs. A deploy heals a stale snapshot without a second command or a separate transaction.
 
 ### Fixed
-- A program pin matches the file it names, not one spelling: a distribution's hardlink (`/usr/bin/git` and `/usr/sbin/git` are one inode) and a project's virtualenv link to the recorded interpreter pass, while a planted copy is still denied.
+- A program pin matches the file it names, not one spelling: a distribution's hardlink (`/usr/bin/git` and `/usr/sbin/git` are one inode) and a project's virtualenv link to the recorded interpreter pass, while a planted copy is still denied. A program named by an explicit path inside the directory the command runs in, or inside the project root, is the project's own choice and is not checked against a machine pin.
 - A linked worktree with no `.moat/policy.yaml` of its own reads the main checkout's, so the repository's rules apply where its agents work.
 
 ## [0.24.0-dc4] - 2026-11-23

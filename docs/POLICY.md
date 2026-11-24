@@ -1693,10 +1693,11 @@ program is pinned, either by `executables:` in the policy or by the snapshot, an
 resolves somewhere else (a `git` planted in `node_modules/.bin`, an absolute path to a copy
 in `/tmp`), the command is denied with rule `executables`. Unpinned programs are not checked.
 After installing a tool in a new location, re-run `openmoat init` or `openmoat doctor --accept`.
-The declared control plane may instead run `openmoat environment refresh`, which records the
-search path it renders and re-pins the lock; a pin matches the file it names, not one
-spelling, so a distribution's hardlink and a virtualenv's link to the recorded interpreter
-pass while a planted copy is denied.
+The declared control plane records the PATH it renders as the snapshot in the same
+transaction as the policy and the lock; its plan reports the snapshot as changed when it
+differs, so a deploy converges it. A pin matches the file it names, not one spelling, and
+a program named by a path inside the project root the caller resolves is the project's
+choice, not a search-path hijack.
 
 On Windows the snapshot also records `PATHEXT`; a bare program name resolves as written, then with each recorded extension in order (default `.com`, `.exe`, `.bat`, `.cmd`).
 

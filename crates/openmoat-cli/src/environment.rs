@@ -135,6 +135,15 @@ impl Snapshot {
         let text = serde_json::to_string_pretty(self)? + "\n";
         write_private(path, text.as_bytes())
     }
+
+    /// Whether the programs or search path differ, ignoring capture time.
+    ///
+    /// Why: the plan compares the PATH the control plane renders with the one
+    /// the machine recorded; `captured_at_ms` alone never means a change.
+    #[must_use]
+    pub fn differs(&self, other: &Self) -> bool {
+        self.path != other.path || self.programs != other.programs
+    }
 }
 
 impl ProgramResolver for Snapshot {

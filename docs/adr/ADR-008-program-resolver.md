@@ -46,11 +46,16 @@ an architecture test.
   hardlink (`/usr/bin/git` and `/usr/sbin/git` are one inode) and a project's virtualenv
   symlink to the recorded interpreter pass, while a planted copy is still denied.
 - A path-invoked program is resolved against the call's own working directory through
-  `paths::normalise` before the comparison, so `.venv/bin/python` is compared as the
-  absolute file it runs.
-- `openmoat environment refresh` records the process's search path as the machine's
-  snapshot and re-pins the lock, under the same anchored-control-plane or person gate as
-  `init --policy`. It exists because `init` without a terminal keeps an existing
-  snapshot: one recorded from a project's virtualenv used to outlive every deploy and
-  deny every other project's interpreter.
+  `paths::normalise` before the comparison, following a leading `cd` in the same command
+  line, so `.venv/bin/python` is compared as the absolute file it runs.
+- A program named by an explicit path inside the project root the caller resolves — the CLI
+  answers through `ProjectResolver`; the core never touches the filesystem — is the
+  project's choice, like the package runner ADR-102 trusts under `node_modules/.bin`, and
+  is not compared with a machine pin; a bare name, or a path outside the root, still is.
+  This is what lets a repository's `.venv/bin/python` run without making every copy of
+  `python3` acceptable.
+- The anchored `init` records the PATH the control plane renders in the same transaction
+  that installs the policy and pins the lock; its plan reports the snapshot as changed when
+  it differs, so convergence refreshes it. `init` without a terminal and without the
+  anchor keeps the recorded snapshot.
 

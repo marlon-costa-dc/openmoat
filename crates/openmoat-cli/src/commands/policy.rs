@@ -75,10 +75,11 @@ pub fn check(args: &CheckArgs) -> Result<Code> {
         Some(snapshot) => snapshot,
         None => &NoResolver,
     };
-    let decision = CompiledPolicy::compile(&policy, &ctx)?.decide_with(
+    let decision = CompiledPolicy::compile(&policy, &ctx)?.decide_with_projects(
         &to_action(args.kind, &args.action),
         programs,
         &FsPathResolver,
+        &crate::context::Projects,
     );
     report(&decision, args.format)
 }

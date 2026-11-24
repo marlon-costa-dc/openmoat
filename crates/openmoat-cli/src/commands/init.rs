@@ -48,7 +48,17 @@ pub fn run(args: &InitArgs) -> Result<Code> {
     let home = Home::locate()?;
     let binary = crate::install::hook_binary()?;
     refuse_writable_binary(&home, &binary)?;
+    // Why (operator 2026-11-24): the environment snapshot is part of what the
+    // install trusts, so the control plane that renders the PATH records it in
+    // this same transaction. A person at a terminal may too; every other
+    // unattended run keeps the recorded snapshot (`unattended.rs`).
+    let person = crate::terminal::person_for("openmoat init");
+    let control_plane = installer::authorized();
+    let trusted = person || control_plane;
     let snapshot = search_path(&home)?;
+    let environment_changed = snapshot.as_ref().is_some_and(|captured| {
+        Snapshot::load_in(&home).map_or(true, |stored| captured.differs(&stored))
+    });
     let mut out = if json {
         Deferred::quiet()
     } else {
@@ -87,12 +97,11 @@ pub fn run(args: &InitArgs) -> Result<Code> {
     // No person over an existing lock: what the lock trusts stays (`unattended.rs`).
     // A person may run a binary the lock does not record yet: moving the hooks
     // to it is what `init` is for.
-    let unattended =
-        unattended::applies(lock_existed, crate::terminal::person_for("openmoat init"));
+    let unattended = unattended::applies(lock_existed, person);
     // The declared control plane installs an engine release, so moving the
     // hooks to its binary is its job; every other unattended run keeps the
     // recorded binary (ADR-104).
-    if unattended && !installer::authorized() {
+    if unattended && !control_plane {
         let recorded = crate::install::self_paths::recorded_binary(&home)?;
         unattended::refuse_other_binary(&recorded, &binary)?;
     }
@@ -101,7 +110,14 @@ pub fn run(args: &InitArgs) -> Result<Code> {
     let hosts = ask::choose(&home, args, &binary, &mut out)?;
 
     let mut steps = summary::Steps {
-        update: state(&home, dry_run, unattended, snapshot.as_ref(), &mut detail)?,
+        update: state(
+            &home,
+            dry_run,
+            unattended,
+            trusted,
+            snapshot.as_ref(),
+            &mut detail,
+        )?,
         ..summary::Steps::default()
     };
     if !dry_run {
@@ -119,6 +135,13 @@ pub fn run(args: &InitArgs) -> Result<Code> {
         host_reports.push(install(
             &home, &binary, host, unattended, dry_run, &mut steps, &mut files,
         )?);
+    }
+    // The plan says changed when the declared PATH differs from the recorded
+    // snapshot, so a deploy installs and records it in the same transaction.
+    if environment_changed {
+        for report in &mut host_reports {
+            report.changed = true;
+        }
     }
     if !hooks_only {
         steps.changed |= sandboxes(&home, &binary, &hosts, dry_run, &mut files)?;
@@ -191,7 +214,7 @@ pub fn run(args: &InitArgs) -> Result<Code> {
             lock_path: home.lock_path().display().to_string(),
             policy_path: home.policy_path().display().to_string(),
             environment_path: home.environment_path().display().to_string(),
-            changed: steps.changed,
+            changed: steps.changed || environment_changed,
             lock_entries_count,
             policy_update: steps.update.clone(),
             hosts: host_reports,
@@ -359,6 +382,7 @@ fn state(
     home: &Home,
     dry_run: bool,
     unattended: bool,
+    trusted: bool,
     snapshot: Option<&Snapshot>,
     out: &mut Deferred,
 ) -> Result<Option<String>> {
@@ -418,7 +442,7 @@ fn state(
             "would environment      {}",
             home.environment_path().display()
         )?;
-    } else if unattended && home.environment_path().is_file() {
+    } else if unattended && !trusted && home.environment_path().is_file() {
         writeln!(
             out,
             "· environment      {} kept: no person at a terminal to record a new search path",

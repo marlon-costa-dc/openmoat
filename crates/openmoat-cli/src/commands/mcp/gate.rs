@@ -278,7 +278,12 @@ impl Gateway {
         };
         let known = secrets::known(&policy.secrets, &ctx.home)?;
         Ok((
-            compiled.decide_with(action, &programs, &FsPathResolver),
+            compiled.decide_with_projects(
+                action,
+                &programs,
+                &FsPathResolver,
+                &crate::context::Projects,
+            ),
             known,
         ))
     }
