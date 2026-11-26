@@ -11,7 +11,7 @@
 //! secret is out of reach only if the sandbox holds. Linux and macOS alike; on
 //! CI a sandbox that does not start fails the test instead of skipping it.
 
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use std::process::Output;
 
 use serde_json::{Value, json};
@@ -49,8 +49,8 @@ impl Boundary {
     /// An installed home with the server in its project and its definitions
     /// and tools accepted, as a person would.
     fn new() -> Self {
-        let parent = Path::new(env!("CARGO_TARGET_TMPDIR"));
-        let sb = Sandbox::installed_in(parent, &[&dir_of(Host::ClaudeCode)]);
+        let parent = Sandbox::worktree_temp_root();
+        let sb = Sandbox::installed_in(&parent, &[&dir_of(Host::ClaudeCode)]);
         let project = sb.project();
         let tools = project.join("tools");
         std::fs::create_dir_all(tools.join("data")).unwrap();

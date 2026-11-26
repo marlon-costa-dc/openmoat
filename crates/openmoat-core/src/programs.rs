@@ -13,6 +13,26 @@ use crate::packages::Ecosystem;
 use crate::rule_id::EXECUTABLES as RULE;
 use crate::verdict::{Decision, Verdict};
 
+/// Resolves the project root a directory belongs to.
+///
+/// The core never touches the filesystem: the CLI answers with the git root
+/// above a directory, so a program the project vendors is recognized as the
+/// project's choice rather than a search-path hijack.
+pub trait ProjectResolver {
+    /// The trusted project root above `dir`, when it has one.
+    fn root_of(&self, dir: &str) -> Option<String>;
+}
+
+/// Resolver for callers without a project (tests, `wasm32`): nothing is exempt.
+#[derive(Debug, Default, Clone, Copy)]
+pub struct NoProjects;
+
+impl ProjectResolver for NoProjects {
+    fn root_of(&self, _dir: &str) -> Option<String> {
+        None
+    }
+}
+
 /// Resolves program names using a search path the kernel controls.
 pub trait ProgramResolver {
     /// Absolute path `program` would run from, or `None` if it is not found.
@@ -21,6 +41,18 @@ pub trait ProgramResolver {
     /// Path recorded for `program` when the kernel was installed, if any.
     fn pinned(&self, _program: &str) -> Option<String> {
         None
+    }
+
+    /// Whether two absolute spellings name the same file on disk.
+    ///
+    /// Why: a pin records a path, and one file has many: a distribution may
+    /// hardlink `git` under `/usr/bin` and `/usr/sbin`, and a project's
+    /// virtualenv symlinks its interpreter to the one the snapshot recorded.
+    /// Denying those spellings blocks normal work without adding protection,
+    /// since the file that runs is the pinned one. The default compares the
+    /// strings, which keeps callers without a filesystem (tests) sound.
+    fn same_file(&self, a: &str, b: &str) -> bool {
+        a == b
     }
 
     /// Where OpenMoat's own binary and its alias are installed. A command
@@ -108,7 +140,7 @@ pub fn check(
         resolver.resolve(name)
     };
     let reason = match actual {
-        Some(path) if expected.iter().any(|e| e == &path) => return None,
+        Some(path) if expected.iter().any(|e| resolver.same_file(&path, e)) => return None,
         Some(path) => format!(
             "`{name}` resolves to {path}, not a pinned path ({})",
             expected.join(", ")
@@ -164,6 +196,22 @@ mod tests {
         assert!(d.reasons[0].contains("/tmp/x/git"));
         let d = check("git", &p, &NoResolver).unwrap();
         assert!(d.reasons[0].contains("not found"));
+    }
+
+    #[test]
+    fn another_spelling_of_the_same_file_passes_a_pin() {
+        struct SameFile;
+        impl ProgramResolver for SameFile {
+            fn resolve(&self, _program: &str) -> Option<String> {
+                None
+            }
+            fn same_file(&self, a: &str, b: &str) -> bool {
+                a == b || (a, b) == ("/usr/bin/git", "/usr/sbin/git")
+            }
+        }
+        let p = pins("git", "/usr/sbin/git");
+        assert!(check("/usr/bin/git", &p, &SameFile).is_none());
+        assert!(check("/tmp/x/git", &p, &SameFile).is_some());
     }
 
     #[test]

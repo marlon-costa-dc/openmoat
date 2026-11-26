@@ -800,7 +800,9 @@ unlisted hosts. The atom never appears in a session that read no secret.
   itself) is Claude in Chrome's tab, window, browser and shortcut lists:
   `mcp__claude-in-chrome__tabs_context_mcp`, `tabs_create_mcp`, `tabs_close_mcp`,
   `list_connected_browsers`, `select_browser`, `switch_browser`, `resize_window` and
-  `shortcuts_list`. A page sets its own title and URL, so their output is still read for
+  `shortcuts_list`, and the Claude desktop app's task list and closing box,
+  `mcp__ccd_turn__update_plan` and `mcp__ccd_turn__wrap_up`, which the app provides to
+  the Claude Code session it runs. A page sets its own title and URL, so their output is still read for
   injected input (§4.1.2): a host, path or command in a tab's title or URL is kept with the
   tool as its source, and a later `curl` to that host needs review (`injected-input`).
   Every tool that returns a page's content still taints the session as before:
@@ -1691,6 +1693,11 @@ program is pinned, either by `executables:` in the policy or by the snapshot, an
 resolves somewhere else (a `git` planted in `node_modules/.bin`, an absolute path to a copy
 in `/tmp`), the command is denied with rule `executables`. Unpinned programs are not checked.
 After installing a tool in a new location, re-run `openmoat init` or `openmoat doctor --accept`.
+The declared control plane records the PATH it renders as the snapshot in the same
+transaction as the policy and the lock; its plan reports the snapshot as changed when it
+differs, so a deploy converges it. A pin matches the file it names, not one spelling, and
+a program named by a path inside the project root the caller resolves is the project's
+choice, not a search-path hijack.
 
 On Windows the snapshot also records `PATHEXT`; a bare program name resolves as written, then with each recorded extension in order (default `.com`, `.exe`, `.bat`, `.cmd`).
 

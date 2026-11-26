@@ -46,8 +46,8 @@ pub use hook_off::{
 pub use hook_trust::HookTrust;
 pub use location::{Locate, Located, Location, XdgDir};
 pub use mcp::{
-    AutoStart, BuiltinMcp, McpAutoStart, McpCommandForm, McpFile, McpNames, McpReader, McpServer,
-    McpSpec, McpSyntax,
+    AutoStart, BuiltinMcp, McpAutoStart, McpCallIds, McpCommandForm, McpFile, McpNames, McpReader,
+    McpServer, McpSpec, McpSyntax,
 };
 pub(crate) use mcp::{
     McpServersJson, Prefixed, SinglePrefixed, escape, server, servers_at, spelled,
@@ -190,9 +190,12 @@ pub struct HostSpec {
     /// them too ([`HookRequest::with_workspace_dirs`]); `None` for a host
     /// without such a setting.
     pub workspace: Option<WorkspaceSpec>,
-    /// The MCP server the host provides itself, whose listed tools return
-    /// metadata, not content; `None` for most hosts.
-    pub builtin_mcp: Option<BuiltinMcp>,
+    /// The MCP servers the host provides itself, whose listed tools return
+    /// metadata, not content; empty for most hosts.
+    pub builtin_mcp: &'static [BuiltinMcp],
+    /// The `_meta` keys an MCP request carries naming the host's session and
+    /// call; `None` for a host whose MCP requests carry none.
+    pub mcp_call_ids: Option<McpCallIds>,
     /// How many times the payload carries a call's arguments (Cline sends them
     /// as `tool_call.input` and again as `preToolUse.parameters`): the guard
     /// reads that many times its per-call limit, so a file is refused at the

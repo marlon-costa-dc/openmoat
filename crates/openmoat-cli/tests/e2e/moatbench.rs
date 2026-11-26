@@ -162,7 +162,7 @@ fn moatbench_hook_needs_a_host() {
 /// `moat bench --report` on one host, with the throwaway home below the
 /// target directory.
 fn report(sb: &Sandbox, format: &str) -> std::process::Output {
-    let scratch = tempfile::tempdir_in(env!("CARGO_TARGET_TMPDIR")).unwrap();
+    let scratch = tempfile::tempdir_in(Sandbox::worktree_temp_root()).unwrap();
     let dir = scratch.path().to_string_lossy().into_owned();
     output(
         sb.command()

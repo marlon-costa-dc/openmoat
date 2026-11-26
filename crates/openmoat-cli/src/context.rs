@@ -57,6 +57,19 @@ pub fn read_policy(path: &Path) -> Result<String> {
     Ok(text)
 }
 
+/// The project root above a directory, for the engine's vendored-program rule.
+///
+/// The core never touches the filesystem; this is the CLI's answer to "is this
+/// path inside the project the command runs in?".
+pub struct Projects;
+
+impl openmoat_core::ProjectResolver for Projects {
+    fn root_of(&self, dir: &str) -> Option<String> {
+        let home = crate::home::user_home().ok()?;
+        crate::project::root_of(Path::new(dir), &home).map(|root| path_string(&root))
+    }
+}
+
 /// Build the evaluation context from explicit flags and the process environment.
 /// The project root defaults to the git root above `cwd` (`project::root_of`);
 /// an explicit `project` that could never be trusted is an error, not a

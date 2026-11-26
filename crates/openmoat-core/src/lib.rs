@@ -78,7 +78,7 @@ pub use policy::{
     RunBoundary, SUPPORTED_VERSION, SandboxSettings, TITLE_MAX_CHARS, Unattended, WHY_MAX_CHARS,
     declared_version, env_name_problem,
 };
-pub use programs::{MapResolver, NoResolver, ProgramResolver};
+pub use programs::{MapResolver, NoProjects, NoResolver, ProgramResolver, ProjectResolver};
 pub use realpath::{MapPathResolver, PathResolver};
 pub use repo::{REPO_RULE_PREFIX, RepoPolicy};
 pub use requests::{

@@ -61,9 +61,36 @@ fn flag_versions() -> impl Iterator<Item = (String, String)> {
 pub struct Sandbox {
     _dir: TempDir,
     pub home: PathBuf,
+    /// The operator's own state home: where the tool manager keeps the
+    /// config-trust state a sandboxed tool reads.
+    pub state_home: PathBuf,
 }
 
 impl Sandbox {
+    /// A private per-worktree root outside the shared temp directory (`/tmp`)
+    /// and outside the repository/worktree tree that Codex's Linux sandbox
+    /// scans with `rg --files` to expand `**/` deny globs.
+    pub fn worktree_temp_root() -> PathBuf {
+        use sha2::Digest as _;
+        let digest = sha2::Sha256::digest(env!("CARGO_TARGET_TMPDIR").as_bytes());
+        let slug = format!(
+            "moat-t-{:02x}{:02x}{:02x}{:02x}",
+            digest[0], digest[1], digest[2], digest[3]
+        );
+        let root = PathBuf::from("/var/tmp").join(slug);
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::{DirBuilderExt as _, PermissionsExt as _};
+            let mut builder = std::fs::DirBuilder::new();
+            builder.recursive(true).mode(0o700);
+            builder.create(&root).unwrap();
+            let _ = std::fs::set_permissions(&root, std::fs::Permissions::from_mode(0o700));
+        }
+        #[cfg(not(unix))]
+        std::fs::create_dir_all(&root).unwrap();
+        root
+    }
+
     /// A home containing the given host configuration directories
     /// (`.claude`, `.codex`, `.cursor`); nothing is installed.
     pub fn bare(host_dirs: &[&str]) -> Self {
@@ -78,7 +105,21 @@ impl Sandbox {
         for host_dir in host_dirs {
             std::fs::create_dir_all(home.join(host_dir)).unwrap();
         }
-        Self { _dir: dir, home }
+        let state_home = std::env::var_os("XDG_STATE_HOME").map_or_else(
+            || {
+                std::env::var_os("HOME")
+                    .map(PathBuf::from)
+                    .unwrap_or_default()
+                    .join(".local")
+                    .join("state")
+            },
+            PathBuf::from,
+        );
+        Self {
+            _dir: dir,
+            home,
+            state_home,
+        }
     }
 
     /// `bare(host_dirs)` followed by a successful `moat init`.
@@ -138,6 +179,13 @@ impl Sandbox {
             .env("PATH", std::env::var_os("PATH").unwrap_or_default())
             .env("HOME", &self.home)
             .env("USERPROFILE", &self.home)
+            // Mise keeps the config-trust state under the state home, and a
+            // sandbox home has none: a tool the sandbox runs through the
+            // manager would read the operator's real config and refuse it as
+            // untrusted, which fails the command before it does anything.
+            // The state home stays the operator's own, exactly as the fleet's
+            // native acceptance binds it.
+            .env("XDG_STATE_HOME", &self.state_home)
             .envs(flag_versions())
             // Debug builds take OpenCode's version from here instead of running the `opencode` on
             // `PATH` (`install/host_version.rs`); empty is none found

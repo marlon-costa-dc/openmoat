@@ -66,3 +66,13 @@ could never tighten an action the user allows.
 - The OS layers do not carry repository rules. Under the Standard tier a trusted
   repository allow for a host or a path outside the user policy still meets the
   sandbox's deny; a repository deny is a hook-only rule, listed in POLICY.md.
+
+## Amendment 2026-11-24 — a linked worktree reads the main checkout's policy
+
+A linked worktree is the same repository as the checkout it was made from, and the
+repository policy is the repository's, not the checkout's. When
+`<worktree>/.moat/policy.yaml` is absent, `repo::find` follows the worktree's `.git`
+file to its `gitdir`, reads `commondir`, and reads the policy of the main checkout.
+Trust binds to the main worktree's root, so one `moat trust` covers every worktree.
+With one file authoritative, a repository's rules apply where its agents work, and a
+linked worktree cannot silently lose them by not running a generator.

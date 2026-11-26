@@ -46,6 +46,18 @@ pub struct BuiltinMcp {
     pub metadata_tools: &'static [&'static str],
 }
 
+/// The keys of an MCP request's `_meta` that name the host's session and its
+/// call, so the gateway takes only the hook decision of that exact call
+/// ([`crate::HostSpec::mcp_call_ids`]).
+#[derive(Debug)]
+#[non_exhaustive]
+pub struct McpCallIds {
+    /// The key naming the session (Codex's `threadId`).
+    pub session: &'static str,
+    /// The key naming the call (Codex's `callId`).
+    pub call: &'static str,
+}
+
 /// The settings that make a host start servers a project's own MCP files
 /// define as soon as a session opens the project, without asking the person.
 /// A started server has run its command before any tool call reaches a hook.

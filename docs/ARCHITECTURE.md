@@ -385,6 +385,7 @@ fails when an adapter matches a tool name its rows do not mention; do not edit i
 | goose | any other unprefixed tool | tool name and arguments | `UnknownTool` (`tool.unknown`) |
 | Antigravity CLI | `run_command` | `CommandLine`, after a `cd` to `Cwd`; needs review when it names an earlier terminal (`RequestedTerminalID`); the Windows shell is not documented | `Shell`, `Unchecked`; `ForeignShell` on Windows |
 | Antigravity CLI | `view_file`, `list_dir` / `write_to_file`, `replace_file_content`, `multi_replace_file_content` | `AbsolutePath`, `DirectoryPath` / `TargetFile` | `FsRead` / `FsWrite` |
+| Antigravity CLI | `read_file` / `write_file`, `edit_file` (Antigravity 2.0) | `Path` | `FsRead` / `FsWrite` |
 | Antigravity CLI | `find_by_name`, `grep_search` | `SearchDirectory`, `SearchPath`, and the directory `Pattern` or `Includes` names before its first wildcard and where a `..` climbs to | `FsRead`, `ReadFiles` |
 | Antigravity CLI | `read_url_content` / `search_web` | `Url` / `query` | `Fetch` / `WebSearch` |
 | Antigravity CLI | `generate_image` | each of `ImagePaths`, read and sent to the model; with none, the tool itself | `ReadFiles`; `UnknownTool` |
@@ -1245,6 +1246,10 @@ What each module holds. The rules for each path are in `AGENTS.md` §2.
 | `scripts/ci/quality-gate.sh` | the local gate: fmt, clippy and tests, as CI runs them |
 | `scripts/smoke-real-agents.sh` | a person's check of the protections with their own Claude Code, Codex, Gemini CLI, pi and GitHub Copilot CLI in a throwaway home (CONTRIBUTING "Testing with real agents") |
 | `scripts/ci/latest-agents.sh`, `scripts/ci/latest-agents/` | the weekly check of each agent's latest release in a throwaway home; `agents.json`, generated from each host spec's `weekly` (`host/<module>/weekly.rs`, `tests/docs/weekly.rs`), records each agent's install, the release its adapter was checked against and its golden shell payload; `hosts/<agent>.sh` holds each record's own steps; `README.md` says what each agent's run proves |
+
+`commands/mcp/proxy/process.rs` bounds upstream shutdown and selects platform process handling.
+`tests/e2e/mcp_gateway/attribution.rs` exercises exact request tickets and their audit evidence.
+`tests/e2e/mcp_gateway/live.rs` drives a running upstream one message at a time.
 
 ## 11. Testing layers
 

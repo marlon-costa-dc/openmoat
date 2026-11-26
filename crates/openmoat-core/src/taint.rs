@@ -30,6 +30,10 @@ const BUILTIN_METADATA_TOOLS: &[(&str, &str)] = &[
     ("claude-in-chrome", "tabs_close_mcp"),
     ("claude-in-chrome", "tabs_context_mcp"),
     ("claude-in-chrome", "tabs_create_mcp"),
+    // Claude Code: the Claude desktop app's task list and closing box, the app's own
+    // bookkeeping
+    ("ccd_turn", "update_plan"),
+    ("ccd_turn", "wrap_up"),
     // /generated
 ];
 

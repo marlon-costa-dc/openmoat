@@ -8,20 +8,22 @@
 
 #![cfg(unix)]
 
-use std::io::{BufRead as _, BufReader, Write as _};
 use std::path::{Path, PathBuf};
-use std::process::{Child, ChildStdin, Stdio};
-use std::sync::mpsc::{Receiver, channel};
+use std::process::Output;
 use std::time::{Duration, Instant};
 
 use serde_json::{Value, json};
 
-use crate::common::{OK, Sandbox, output, stdout, text};
+use crate::common::{OK, Sandbox, USAGE, output, stdout, text};
 use crate::hosts::dir_of;
 use openmoat_hosts::Host;
 
+mod attribution;
 mod flow;
 mod injected;
+mod live;
+
+use live::Live;
 
 const FIXTURES: &str = include_str!("mcp_gateway/fixtures.json");
 
@@ -36,17 +38,22 @@ fn server_script() -> PathBuf {
 struct Gateway {
     sb: Sandbox,
     record: PathBuf,
+    host: Option<&'static str>,
 }
 
 impl Gateway {
     fn new() -> Self {
+        Self::for_host(None)
+    }
+
+    fn for_host(host: Option<&'static str>) -> Self {
         let sb = Sandbox::installed(&[&dir_of(Host::ClaudeCode)]);
         let record = sb.home.join("record.jsonl");
-        let gateway = Self { sb, record };
+        let gateway = Self { sb, record, host };
         // `openmoat mcp proxy` starts only a definition a person accepted
         // (ADR-049): one per mode, each starting the proxy as `docs`.
         for mode in [
-            "answer", "silent", "rug", "inject", "fail", "instruct", "sample",
+            "answer", "silent", "rug", "inject", "fail", "instruct", "sample", "stubborn",
         ] {
             let line = gateway.proxy_line(mode);
             let args: Vec<&str> = line.iter().map(String::as_str).collect();
@@ -70,9 +77,12 @@ impl Gateway {
     fn proxy_line(&self, mode: &str) -> Vec<String> {
         let script = server_script().to_string_lossy().into_owned();
         let record = self.record.to_string_lossy().into_owned();
-        ["--server", "docs", "--", "python3", &script, &record, mode]
-            .map(str::to_owned)
-            .to_vec()
+        let mut args = vec!["--server", "docs"];
+        if let Some(host) = self.host {
+            args.extend(["--host", host]);
+        }
+        args.extend(["--", "python3", &script, &record, mode]);
+        args.into_iter().map(str::to_owned).collect()
     }
 
     fn proxy(&self, mode: &str) -> std::process::Command {
@@ -83,10 +93,14 @@ impl Gateway {
 
     /// One session: `lines` from the host, all at once; what the host got.
     fn session(&self, mode: &str, lines: &[String]) -> String {
-        let input: String = lines.iter().flat_map(|l| [l.as_str(), "\n"]).collect();
-        let out = output(&mut self.proxy(mode), Some(&input));
+        let out = self.run(mode, lines);
         assert_eq!(out.status.code(), Some(OK), "{}", text(&out));
         stdout(&out)
+    }
+
+    fn run(&self, mode: &str, lines: &[String]) -> Output {
+        let input: String = lines.iter().flat_map(|l| [l.as_str(), "\n"]).collect();
+        output(&mut self.proxy(mode), Some(&input))
     }
 
     /// What reached the server so far.
@@ -152,17 +166,6 @@ impl Gateway {
             })
             .to_owned()
     }
-
-    /// The audit rows the proxy left.
-    fn proxy_rows(&self) -> Vec<Value> {
-        let out = self.sb.moat(&["audit", "export"]);
-        assert_eq!(out.status.code(), Some(OK), "{}", text(&out));
-        stdout(&out)
-            .lines()
-            .map(|l| serde_json::from_str::<Value>(l).unwrap())
-            .filter(|row| row["host"] == "mcp-proxy")
-            .collect()
-    }
 }
 
 fn list(id: u64) -> String {
@@ -181,6 +184,57 @@ fn answer(host: &str, id: u64) -> Value {
         .filter_map(|l| serde_json::from_str::<Value>(l).ok())
         .find(|m| m["id"] == id)
         .unwrap_or_else(|| panic!("no answer to {id}: {host}"))
+}
+
+#[test]
+fn closing_stdin_reaps_an_upstream_that_ignores_eof() {
+    let gateway = Gateway::new();
+    let mut proxy = Live::start(&gateway, "stubborn");
+    let ready = Instant::now() + Duration::from_secs(5);
+    let pid = loop {
+        if let Some(pid) = gateway
+            .received()
+            .first()
+            .and_then(|row| row["pid"].as_u64())
+        {
+            break pid;
+        }
+        assert!(Instant::now() < ready, "server never started");
+        std::thread::sleep(Duration::from_millis(20));
+    };
+    drop(proxy.stdin.take());
+    let deadline = Instant::now() + Duration::from_secs(5);
+    loop {
+        if let Some(status) = proxy.child.try_wait().unwrap() {
+            assert!(!status.success(), "forced shutdown must not report success");
+            break;
+        }
+        if Instant::now() >= deadline {
+            let _ = proxy.child.kill();
+            let _ = proxy.child.wait();
+            panic!("upstream {pid} prevented the proxy from exiting after EOF");
+        }
+        std::thread::sleep(Duration::from_millis(20));
+    }
+    let pid = rustix::process::Pid::from_raw(i32::try_from(pid).unwrap()).unwrap();
+    assert_eq!(
+        rustix::process::test_kill_process(pid),
+        Err(rustix::io::Errno::SRCH)
+    );
+}
+
+#[test]
+fn an_upstream_that_exits_cleanly_without_a_reply_reports_failure() {
+    let gateway = Gateway::new();
+    let out = gateway.run("silent", &[list(1)]);
+    assert_eq!(out.status.code(), Some(USAGE), "{}", text(&out));
+    assert!(text(&out).contains("closed its output with unanswered requests"));
+    assert_eq!(gateway.received()[0]["id"], 1);
+}
+
+#[test]
+fn attributed_codex_requests_reach_stdio_only_with_their_own_exact_ticket() {
+    attribution::assert_exact_codex_tickets();
 }
 
 #[test]
@@ -432,7 +486,14 @@ fn the_relay_fixtures_hold_through_the_binary() {
             decide_like_a_host(&gw, line);
         }
         gw.forget();
-        gw.session("silent", &lines);
+        let out = gw.run("silent", &lines);
+        assert!(
+            out.status.code() == Some(OK)
+                || (out.status.code() == Some(USAGE)
+                    && text(&out).contains("closed its output with unanswered requests")),
+            "{id}: {}",
+            text(&out)
+        );
         let received = gw.received();
         let recorded = gw.recorded();
         for call in gw.calls() {
@@ -480,62 +541,5 @@ fn decide_like_a_host(gw: &Gateway, line: &str) {
                 gw.hook(Host::ClaudeCode.id(), "fixtures", "search", &arguments);
             }
         }
-    }
-}
-
-/// A proxy session driven a line at a time.
-struct Live {
-    child: Child,
-    stdin: Option<ChildStdin>,
-    lines: Receiver<String>,
-}
-
-impl Live {
-    fn start(gw: &Gateway, mode: &str) -> Self {
-        let mut child = gw
-            .proxy(mode)
-            .stdin(Stdio::piped())
-            .stdout(Stdio::piped())
-            .stderr(Stdio::inherit())
-            .spawn()
-            .unwrap();
-        let stdin = child.stdin.take();
-        let out = BufReader::new(child.stdout.take().unwrap());
-        let (tx, lines) = channel();
-        std::thread::spawn(move || {
-            for line in out.lines().map_while(Result::ok) {
-                if tx.send(line).is_err() {
-                    break;
-                }
-            }
-        });
-        Self {
-            child,
-            stdin,
-            lines,
-        }
-    }
-
-    /// Send `line` and wait for the answer to `id`.
-    fn ask(&mut self, line: &str, id: u64) -> Value {
-        let stdin = self.stdin.as_mut().unwrap();
-        writeln!(stdin, "{line}").unwrap();
-        stdin.flush().unwrap();
-        loop {
-            let got = self
-                .lines
-                .recv_timeout(Duration::from_secs(20))
-                .expect("an answer");
-            if let Ok(message) = serde_json::from_str::<Value>(&got)
-                && message["id"] == id
-            {
-                return message;
-            }
-        }
-    }
-
-    fn end(mut self) {
-        drop(self.stdin.take());
-        let _ = self.child.wait();
     }
 }

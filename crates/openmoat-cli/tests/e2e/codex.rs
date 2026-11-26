@@ -155,7 +155,7 @@ fn codex_166_ssh_key_attack_is_denied_and_audited() {
 #[test]
 fn installed_codex_command_executes_guard_from_a_path_with_shell_characters() {
     let sb = Sandbox::bare(&[".codex"]);
-    let installed = tempfile::tempdir_in(env!("CARGO_TARGET_TMPDIR")).unwrap();
+    let installed = tempfile::tempdir_in(Sandbox::worktree_temp_root()).unwrap();
     // Quotes are valid POSIX filename characters; Windows permits apostrophes
     // and percent signs but not double quotes.
     let name = if cfg!(windows) {

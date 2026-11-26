@@ -300,10 +300,10 @@ fn the_taint_list_protects_each_hosts_own_files() {
 #[test]
 fn the_core_lists_each_hosts_builtin_metadata_tools() {
     let mut body = String::new();
-    for host in Host::EVERY {
-        let Some(builtin) = &host.spec().builtin_mcp else {
-            continue;
-        };
+    for builtin in Host::EVERY
+        .into_iter()
+        .flat_map(|host| host.spec().builtin_mcp)
+    {
         for line in builtin.why.lines() {
             let _ = writeln!(body, "    // {line}");
         }

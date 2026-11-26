@@ -8,6 +8,42 @@ view at the end of the file.
 
 ## [Unreleased]
 
+## [0.24.0-dc5] - 2026-11-24
+
+### Added
+- The anchored `init` records the PATH the control plane renders as the machine's snapshot in the same transaction that installs the policy and pins the lock, and its plan reports the snapshot as changed when it differs. A deploy heals a stale snapshot without a second command or a separate transaction.
+
+### Fixed
+- A program pin matches the file it names, not one spelling: a distribution's hardlink (`/usr/bin/git` and `/usr/sbin/git` are one inode) and a project's virtualenv link to the recorded interpreter pass, while a planted copy is still denied. A program named by an explicit path inside the directory the command runs in, or inside the project root, is the project's own choice and is not checked against a machine pin.
+- A linked worktree with no `.moat/policy.yaml` of its own reads the main checkout's, so the repository's rules apply where its agents work.
+
+## [0.24.0-dc4] - 2026-11-23
+
+### Added
+- The published release embeds `OPENMOAT_INSTALLER_ANCHOR` — the launcher path and SHA-256 of the local control plane — and accepts `init --policy`, `mcp accept` and `sandbox sync` from that caller alone, so a host policy can be installed without a person at a terminal and every other process stays refused ([#15](https://github.com/marlon-costa-dc/openmoat/pull/15)).
+
+### Changed
+- A `-dc` release skips the upstream registry publishers (crates.io, npm, Homebrew): those trusted-publishing identities belong to the upstream repository, so a fork release run is green and its verdict means what it says ([#16](https://github.com/marlon-costa-dc/openmoat/pull/16)).
+
+## [0.24.0-dc3] - 2026-11-21
+
+### Fixed
+- Claude Desktop's task list and wrap-up tools no longer taint later writes. Content returned by other MCP tools still does.
+- Keep the deciding rule's guidance when a blocked Claude call also contains allowed actions.
+- Isolate shell pipeline patterns and carry unseen reviews into session taint.
+- Give accepted MCP requests time to finish after client EOF while keeping idle servers on the shorter shutdown timeout.
+- Report a protocol failure when an MCP server exits successfully with accepted requests unanswered.
+
+## [0.24.0-dc2] - 2026-11-20
+
+### Added
+- `openmoat init --hooks-only --format json` for scoped hook planning and installation ([#846](https://github.com/crocodile-labs/openmoat/pull/846)).
+- Shell wrapper unwrapping for `rtk` and `direnv exec` ([#845](https://github.com/crocodile-labs/openmoat/pull/845)).
+
+### Fixed
+- Map Antigravity 2.0 `read_file`, `write_file`, and `edit_file` (`Path`) in `antigravity-cli` ([#844](https://github.com/crocodile-labs/openmoat/pull/844)).
+- Correlate attributed Codex MCP calls with exact hook tickets, issue tickets only after audit writes, and bound stdio MCP upstream shutdown ([#847](https://github.com/crocodile-labs/openmoat/pull/847)).
+
 ## [0.24.0] - 2026-11-20
 
 ### Added
@@ -1380,6 +1416,9 @@ First beta and first release that is not a GitHub pre-release.
 - Documentation restructured for the decide-only alpha (#94). New `docs/ROADMAP.md`, `docs/ARCHITECTURE.md`, `docs/THREAT_MODEL.md` and an ADR index (`docs/adr/README.md`). `docs/OVERVIEW.md`, `DESIGN.md`, `STRENGTH.md`, `PROGRESS.md`, `TECH_STACK.md` and `REPO_STRUCTURE.md` are retired; what was still true moved into the new documents. README: `git clone` install step, `CLAUDE_CONFIG_DIR`, examples checked against the default policy. SECURITY.md: supported versions (latest alpha only). `moat --help` says what the operating system does and does not enforce.
 
 [Unreleased]: https://github.com/crocodile-labs/openmoat/compare/v0.24.0...HEAD
+[0.24.0-dc3]: https://github.com/marlon-costa-dc/openmoat/compare/v0.24.0-dc2...v0.24.0-dc3
+[0.24.0-dc4]: https://github.com/marlon-costa-dc/openmoat/compare/v0.24.0-dc3...v0.24.0-dc4
+[0.24.0-dc5]: https://github.com/marlon-costa-dc/openmoat/compare/v0.24.0-dc4...v0.24.0-dc5
 [0.24.0]: https://github.com/crocodile-labs/openmoat/compare/v0.23.1...v0.24.0
 [0.23.1]: https://github.com/crocodile-labs/openmoat/compare/v0.23.0...v0.23.1
 [0.23.0]: https://github.com/crocodile-labs/openmoat/compare/v0.22.1...v0.23.0

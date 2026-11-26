@@ -69,7 +69,15 @@ pub fn find(home: &Home, root: &Path) -> Result<Option<Found>> {
         // `.moat` a file (`moat run --isolate` puts an empty placeholder there
         // for the session) holds no policy, as when it is missing.
         Err(e) if matches!(e.kind(), ErrorKind::NotFound | ErrorKind::NotADirectory) => {
-            return Ok(None);
+            // Why (operator 2026-11-24): a linked worktree is the same
+            // repository as the checkout it was made from, and the policy is
+            // the repository's, not the checkout's. Reading it from the main
+            // worktree keeps one file authoritative and makes its rules apply
+            // inside every worktree, which is where the agents work.
+            return match main_worktree(root) {
+                Some(main) => find(home, &main),
+                None => Ok(None),
+            };
         }
         meta => meta.with_context(|| format!("reading repository policy {}", path.display()))?,
     };
@@ -98,6 +106,35 @@ pub fn find(home: &Home, root: &Path) -> Result<Option<Found>> {
         path,
         policy,
     }))
+}
+
+/// The main worktree of the repository `root` is a linked worktree of, when
+/// `root` is one: `.git` is a file naming the worktree's git directory, whose
+/// `commondir` names the main checkout's `.git`.
+///
+/// A normal checkout (`root/.git` a directory) has no main worktree above it.
+fn main_worktree(root: &Path) -> Option<PathBuf> {
+    let dot_git = root.join(".git");
+    if !fs::symlink_metadata(&dot_git).ok()?.is_file() {
+        return None;
+    }
+    let text = fs::read_to_string(&dot_git).ok()?;
+    let gitdir = text.strip_prefix("gitdir:")?.trim();
+    let gitdir = if Path::new(gitdir).is_absolute() {
+        PathBuf::from(gitdir)
+    } else {
+        root.join(gitdir)
+    };
+    let gitdir = fs::canonicalize(gitdir).ok()?;
+    let common = fs::read_to_string(gitdir.join("commondir")).ok()?;
+    let common = common.trim();
+    let common = if Path::new(common).is_absolute() {
+        PathBuf::from(common)
+    } else {
+        gitdir.join(common)
+    };
+    let main = fs::canonicalize(common).ok()?.parent()?.to_path_buf();
+    (main != root).then_some(main)
 }
 
 /// The person's trust records. Only a file the lock pins counts: `moat trust`

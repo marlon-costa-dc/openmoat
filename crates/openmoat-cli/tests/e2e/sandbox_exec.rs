@@ -55,6 +55,10 @@ fn cat_output(codex: &Path, sb: &Sandbox, project: &Path, file: &str) -> Output 
         .env_clear()
         .env("PATH", "/usr/bin:/bin")
         .env("HOME", &sb.home)
+        // The tool manager keeps the config-trust state under the state home;
+        // a cleared environment leaves it without one, and the manager then
+        // refuses the operator's own configuration as untrusted.
+        .env("XDG_STATE_HOME", &sb.state_home)
         .env("CODEX_HOME", sb.home.join(dir_of(Host::Codex)))
         .output()
         .expect("running codex sandbox")
@@ -114,10 +118,7 @@ fn codex_from_the_standalone_installer_starts_commands() {
         return;
     };
     // Outside the read roots (`/tmp`), as a home directory is.
-    let sb = Sandbox::bare_in(
-        Path::new(env!("CARGO_TARGET_TMPDIR")),
-        &[&dir_of(Host::Codex)],
-    );
+    let sb = Sandbox::bare_in(&Sandbox::worktree_temp_root(), &[&dir_of(Host::Codex)]);
     let standalone = sb.home.join(".codex/packages/standalone");
     let install = |version: &str| {
         let release = standalone.join(format!("releases/{version}-x86_64-unknown-linux-musl"));

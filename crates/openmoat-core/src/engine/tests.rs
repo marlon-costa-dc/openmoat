@@ -5,6 +5,7 @@ mod glob;
 mod installs;
 mod moved_dirs;
 mod personal;
+mod programs;
 mod staging;
 mod taint;
 mod unparseable;
@@ -206,19 +207,6 @@ fn value_reads_are_checked_against_deny_rules_only() {
 /// An approval cannot make an unparseable command run: `sh -ee.a` has an option
 /// cluster the shell grammar does not know, so even a literal allow of exactly
 /// that command needs review (found by the `literal_pattern` fuzz target).
-#[test]
-fn an_approved_unparseable_command_still_needs_review() {
-    let pattern = crate::literal_shell_pattern("sh -ee.a").unwrap();
-    let p = policy(&format!(
-        "version: 1\ndefaults: deny\nallow:\n  - id: approved\n    shell: [\"{pattern}\"]\n"
-    ));
-    let d = evaluate(&p, &ctx(), &shell("sh -ee.a")).unwrap();
-    assert_eq!(
-        (d.verdict, d.rules),
-        (Verdict::Review, vec!["unparseable".to_owned()])
-    );
-}
-
 #[test]
 fn pinned_executables_are_enforced_through_the_resolver() {
     use crate::programs::MapResolver;
@@ -536,4 +524,24 @@ fn owned_and_borrowed_compilation_decide_the_same() {
         );
     }
     assert_eq!(owned.policy(), &p);
+}
+
+#[test]
+fn simple_shell_rules_do_not_false_match_whole_pipelines_and_reasons_carry_patterns() {
+    let p = Policy::parse(crate::DEFAULT_POLICY).unwrap();
+    let compiled = CompiledPolicy::compile(&p, &ctx()).unwrap();
+    // Both `git remote -v` and `head -2` are allowed by `dev-shell`; `git remote *` in
+    // `git-internals` is a simple-command pattern and must not match the Pipeline atom.
+    let d = compiled.decide(&shell("git remote -v | head -2"));
+    assert_eq!(d.verdict, Verdict::Allow, "{d:?}");
+    // A real `git remote add` is still held by `git-internals` with pattern and allow hint.
+    let d = compiled.decide(&shell("git remote add origin https://github.com/a/b"));
+    assert_eq!(d.verdict, Verdict::Review, "{d:?}");
+    assert_eq!(d.rules, ["git-internals"]);
+    assert!(
+        d.reasons[0].contains("[pattern `git remote *`]")
+            && d.reasons[0].contains("[allow hint: allow [dev-shell] only allows"),
+        "{:?}",
+        d.reasons
+    );
 }

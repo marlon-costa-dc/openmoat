@@ -135,6 +135,15 @@ impl Snapshot {
         let text = serde_json::to_string_pretty(self)? + "\n";
         write_private(path, text.as_bytes())
     }
+
+    /// Whether the programs or search path differ, ignoring capture time.
+    ///
+    /// Why: the plan compares the PATH the control plane renders with the one
+    /// the machine recorded; `captured_at_ms` alone never means a change.
+    #[must_use]
+    pub fn differs(&self, other: &Self) -> bool {
+        self.path != other.path || self.programs != other.programs
+    }
 }
 
 impl ProgramResolver for Snapshot {
@@ -144,6 +153,36 @@ impl ProgramResolver for Snapshot {
 
     fn pinned(&self, program: &str) -> Option<String> {
         self.programs.get(program).map(|p| path_string(p))
+    }
+
+    fn same_file(&self, a: &str, b: &str) -> bool {
+        same_file(a, b)
+    }
+}
+
+/// Whether two absolute spellings name the same file.
+///
+/// Why: a pin records one spelling, and the same file has several: a
+/// distribution hardlinks `git` under `/usr/bin` and `/usr/sbin`, and a
+/// project's virtualenv symlinks its interpreter to the recorded one. The
+/// guard should decide what file runs, not how it is spelled. A missing or
+/// unreadable path never matches, so a planted copy stays a deny.
+#[cfg(unix)]
+fn same_file(a: &str, b: &str) -> bool {
+    use std::os::unix::fs::MetadataExt as _;
+    match (fs::metadata(a), fs::metadata(b)) {
+        (Ok(x), Ok(y)) => x.dev() == y.dev() && x.ino() == y.ino(),
+        _ => false,
+    }
+}
+
+/// [`same_file`] where the platform has no device and inode: the canonical
+/// paths, which unify symbolic links but not hardlinks.
+#[cfg(not(unix))]
+fn same_file(a: &str, b: &str) -> bool {
+    match (fs::canonicalize(a), fs::canonicalize(b)) {
+        (Ok(x), Ok(y)) => x == y,
+        _ => false,
     }
 }
 
@@ -163,6 +202,10 @@ impl ProgramResolver for WithOwnBinary<'_> {
 
     fn pinned(&self, program: &str) -> Option<String> {
         self.snapshot.pinned(program)
+    }
+
+    fn same_file(&self, a: &str, b: &str) -> bool {
+        self.snapshot.same_file(a, b)
     }
 
     fn local_bin(&self, dirs: &[String], name: &str) -> bool {

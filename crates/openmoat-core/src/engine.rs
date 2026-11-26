@@ -9,7 +9,7 @@ use std::borrow::Cow;
 
 use crate::action::{Action, AtomicAction};
 use crate::kind::Kind;
-use crate::pattern::{GlobPattern, ShellPattern, any_match};
+use crate::pattern::{GlobPattern, ShellPattern};
 use crate::policy::{Policy, PolicyError, RuleGroup};
 use crate::programs::{self, NoResolver, ProgramResolver};
 use crate::realpath::PathResolver;
@@ -176,7 +176,7 @@ impl<'p> CompiledPolicy<'p> {
     #[must_use]
     pub fn evaluate_atomic(&self, action: &AtomicAction) -> Option<Decision> {
         if let Some(deny) = Self::hit(&self.deny, Verdict::Deny, action) {
-            return Some(deny);
+            return Some(self.with_allow_hint(deny, action));
         }
         let own = self.own_rules(action).or_else(|| {
             (!matches!(action, AtomicAction::Pipeline { .. })).then(|| {
@@ -188,13 +188,67 @@ impl<'p> CompiledPolicy<'p> {
                 )
             })
         });
-        match Self::hit(&self.repo_review, Verdict::Review, action) {
+        let decision = match Self::hit(&self.repo_review, Verdict::Review, action) {
             Some(repo) => Some(match own {
                 Some(own) if own.verdict > repo.verdict => own,
                 _ => repo,
             }),
             None => own,
+        };
+        decision.map(|d| self.with_allow_hint(d, action))
+    }
+
+    /// Attach a near-miss hint from `allow` rules when a `Shell` atom is
+    /// decided as `Review` or `Deny`.
+    fn with_allow_hint(&self, mut decision: Decision, action: &AtomicAction) -> Decision {
+        if matches!(decision.verdict, Verdict::Review | Verdict::Deny)
+            && let AtomicAction::Shell { argv } = action
+            && let Some(hint) = self.allow_near_miss_hint(argv)
+            && let Some(first) = decision.reasons.first_mut()
+            && !first.contains("[allow hint:")
+        {
+            first.push_str(" [allow hint: ");
+            first.push_str(&hint);
+            first.push(']');
         }
+        decision
+    }
+
+    /// Explain why `allow` rules that share the command head with `argv` did
+    /// not allow it (either excluded by a `!pattern` negation or requiring
+    /// specific arguments / end-of-command `$`).
+    fn allow_near_miss_hint(&self, argv: &[String]) -> Option<String> {
+        for g in &self.allow {
+            let mut matched_positive = None;
+            let mut matched_negation = None;
+            let mut head_candidates = Vec::new();
+            for p in g.shell.iter().filter(|p| !p.is_pipeline_pattern()) {
+                if p.is_match(argv) {
+                    if p.negated {
+                        matched_negation = Some(p.source());
+                        break;
+                    } else if matched_positive.is_none() {
+                        matched_positive = Some(p.source());
+                    }
+                } else if !p.negated && p.matches_command_head(argv) && head_candidates.len() < 3 {
+                    head_candidates.push(format!("`{}`", p.source()));
+                }
+            }
+            if let (Some(pos), Some(neg)) = (matched_positive, matched_negation) {
+                return Some(format!(
+                    "allow [{}] matched `{pos}` but excluded by `{neg}`",
+                    g.id
+                ));
+            }
+            if matched_positive.is_none() && !head_candidates.is_empty() {
+                return Some(format!(
+                    "allow [{}] only allows {}",
+                    g.id,
+                    head_candidates.join(", ")
+                ));
+            }
+        }
+        None
     }
 
     /// The first of deny, repository review, allow, review and defer whose rules
@@ -216,12 +270,15 @@ impl<'p> CompiledPolicy<'p> {
     /// when none does.
     fn hit(groups: &[CompiledGroup], verdict: Verdict, action: &AtomicAction) -> Option<Decision> {
         let mut hit = Decision::new(verdict);
-        for g in groups.iter().filter(|g| g.matches(action)) {
-            let why = g.reason.as_ref().map_or_else(
-                || action.describe(),
-                |r| format!("{r}: {}", action.describe()),
-            );
-            hit.push(&g.id, why);
+        for g in groups {
+            if let Some(pat) = g.matched_pattern(action) {
+                let base = g.reason.as_ref().map_or_else(
+                    || action.describe(),
+                    |r| format!("{r}: {}", action.describe()),
+                );
+                let why = format!("{base} [pattern `{pat}`]");
+                hit.push(&g.id, why);
+            }
         }
         (!hit.rules.is_empty()).then_some(hit)
     }
@@ -265,9 +322,38 @@ impl CompiledGroup {
     }
 
     fn matches(&self, action: &AtomicAction) -> bool {
+        self.matched_pattern(action).is_some()
+    }
+
+    fn matched_pattern(&self, action: &AtomicAction) -> Option<&str> {
         match (action, action.subject()) {
-            (AtomicAction::Shell { argv } | AtomicAction::Pipeline { argv }, _) => {
-                any_match(&self.shell, argv.as_slice())
+            (AtomicAction::Shell { argv }, _) => {
+                let mut pos = None;
+                for p in self.shell.iter().filter(|p| !p.is_pipeline_pattern()) {
+                    if p.is_match(argv.as_slice()) {
+                        if p.negated {
+                            return None;
+                        }
+                        if pos.is_none() {
+                            pos = Some(p.source());
+                        }
+                    }
+                }
+                pos
+            }
+            (AtomicAction::Pipeline { argv }, _) => {
+                let mut pos = None;
+                for p in self.shell.iter().filter(|p| p.is_pipeline_pattern()) {
+                    if p.is_match(argv.as_slice()) {
+                        if p.negated {
+                            return None;
+                        }
+                        if pos.is_none() {
+                            pos = Some(p.source());
+                        }
+                    }
+                }
+                pos
             }
             (_, Some(subject)) => {
                 let globs = match &self.bare_hosts {
@@ -281,13 +367,27 @@ impl CompiledGroup {
                     }
                     _ => &self.globs,
                 };
-                action
-                    .kind()
-                    .rule_kinds()
-                    .iter()
-                    .any(|k| any_match(&globs[*k as usize], subject))
+                for k in action.kind().rule_kinds() {
+                    let mut pos = None;
+                    let mut excluded = false;
+                    for p in &globs[*k as usize] {
+                        if p.is_match(subject) {
+                            if p.negated {
+                                excluded = true;
+                                break;
+                            }
+                            if pos.is_none() {
+                                pos = Some(p.source());
+                            }
+                        }
+                    }
+                    if !excluded && pos.is_some() {
+                        return pos;
+                    }
+                }
+                None
             }
-            (_, None) => false,
+            (_, None) => None,
         }
     }
 }
@@ -382,12 +482,61 @@ impl CompiledPolicy<'_> {
         resolver: &dyn ProgramResolver,
         paths: &dyn PathResolver,
     ) -> Decision {
+        self.decide_with_projects(action, resolver, paths, &crate::programs::NoProjects)
+    }
+
+    /// [`Self::decide_with`] with the project roots a caller can resolve.
+    ///
+    /// Why: a program the project vendors is the project's choice, and only
+    /// the caller knows where the project root is (the core never touches the
+    /// filesystem). A bare name, or a path outside the root, still meets its
+    /// pin.
+    #[must_use]
+    pub fn decide_with_projects(
+        &self,
+        action: &Action,
+        resolver: &dyn ProgramResolver,
+        paths: &dyn PathResolver,
+        projects: &dyn crate::programs::ProjectResolver,
+    ) -> Decision {
         let (atoms, unparsed) = self.all_atoms(action, paths);
         // a runner's package the project installed or declared (ADR-102)
         let atoms = packages::on_hand(atoms, &self.ctx, resolver);
+        let mut cwd = self.ctx.cwd.clone();
         let pins = atoms.iter().filter_map(|atom| match atom {
             AtomicAction::Shell { argv } => {
-                programs::check(&argv[0], &self.policy.executables, resolver)
+                // Why: a path-invoked program is written relative to the
+                // directory the shell is in when it runs, and one command
+                // line may move there first (`cd repo && .venv/bin/python`).
+                // Follow a leading `cd` so the identity check below compares
+                // the file that actually runs, not the call's starting
+                // directory.
+                if let Some(next) = cd_target(argv, &self.ctx, &cwd) {
+                    cwd = next;
+                }
+                let written = &argv[0];
+                let program = if written.contains('/') || written.contains('\\') {
+                    crate::paths::normalise(
+                        written,
+                        &self.ctx.home,
+                        self.ctx.project.as_deref(),
+                        &cwd,
+                    )
+                } else {
+                    written.clone()
+                };
+                // Why (operator 2026-11-24): a program the project itself
+                // vendors — a virtualenv's interpreter, `node_modules/.bin` —
+                // is the project's choice, like the package runner ADR-102
+                // already trusts inside it. Only the resolved project root
+                // exempts it; a bare name, or a path outside that root, still
+                // meets the pin.
+                let under =
+                    |root: &str| program == root || program.starts_with(&format!("{root}/"));
+                if projects.root_of(&cwd).as_deref().is_some_and(under) {
+                    return None;
+                }
+                programs::check(&program, &self.policy.executables, resolver)
             }
             _ => None,
         });
@@ -460,6 +609,27 @@ impl CompiledPolicy<'_> {
             })
             .unwrap_or_else(|| unparseable(verdict, "action has no evaluable parts".to_owned()))
     }
+}
+
+/// The directory a plain `cd <word>` moves to, resolved against `cwd`; `None`
+/// for any other command, `cd -`, or `cd` with no word.
+///
+/// Why: a program named by a relative path runs in the directory the shell is
+/// in at that moment, and one command line may move there first.
+fn cd_target(argv: &[String], ctx: &EvalContext, cwd: &str) -> Option<String> {
+    if argv.first().map(String::as_str) != Some("cd") {
+        return None;
+    }
+    let word = argv.get(1)?;
+    if word.starts_with('-') {
+        return None;
+    }
+    Some(crate::paths::normalise(
+        word,
+        &ctx.home,
+        ctx.project.as_deref(),
+        cwd,
+    ))
 }
 
 /// Input that cannot be classified: the policy's catch-all, never `allow` (ADR-025).

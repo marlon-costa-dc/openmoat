@@ -19,10 +19,7 @@ fn exe(name: &str) -> String {
 /// A home outside the temp directory (`init` refuses a binary inside one)
 /// with `bin/` holding nothing yet.
 fn home_with_bin() -> (Sandbox, PathBuf) {
-    let sb = Sandbox::bare_in(
-        Path::new(env!("CARGO_TARGET_TMPDIR")),
-        &[&dir_of(Host::ClaudeCode)],
-    );
+    let sb = Sandbox::bare_in(&Sandbox::worktree_temp_root(), &[&dir_of(Host::ClaudeCode)]);
     let bin = sb.home.join("bin");
     fs::create_dir_all(&bin).unwrap();
     (sb, bin)
@@ -101,7 +98,12 @@ fn moat_runs_the_same_command_as_openmoat() {
         person(&sb, &moat, &["init", "--yes"]).status.code(),
         Some(OK)
     );
-    assert_eq!(Path::new(&hook_command(&sb)), openmoat);
+    let recorded = PathBuf::from(hook_command(&sb));
+    assert_eq!(recorded.file_name(), openmoat.file_name());
+    assert_eq!(
+        fs::canonicalize(&recorded).unwrap(),
+        fs::canonicalize(&openmoat).unwrap()
+    );
 }
 
 #[test]

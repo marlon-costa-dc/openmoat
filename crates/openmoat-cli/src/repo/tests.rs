@@ -75,3 +75,38 @@ fn a_policy_that_exists_but_is_no_file_or_malformed_is_an_error() {
     let error = format!("{:#}", find(&home, &root).err().unwrap());
     assert!(error.contains("invalid repository policy"), "{error}");
 }
+
+/// A linked worktree is the same repository: with no policy of its own it
+/// reads the main checkout's, so the repository's rules apply where the
+/// agents work.
+#[test]
+fn a_linked_worktree_reads_the_main_worktrees_policy() {
+    let (dir, home, main) = project();
+    let worktree = dir.path().join("worktree");
+    fs::create_dir_all(main.join(home::DIR_NAME)).unwrap();
+    fs::write(
+        main.join(home::DIR_NAME).join("policy.yaml"),
+        "version: 1\ndeny:\n  - id: test-block\n    reason: test\n    shell: ['false']\n",
+    )
+    .unwrap();
+    fs::create_dir_all(main.join(".git/worktrees/wt")).unwrap();
+    fs::write(main.join(".git/worktrees/wt/commondir"), "../..").unwrap();
+    fs::create_dir_all(&worktree).unwrap();
+    fs::write(
+        worktree.join(".git"),
+        format!("gitdir: {}\n", main.join(".git/worktrees/wt").display()),
+    )
+    .unwrap();
+
+    let found = find(&home, &worktree)
+        .unwrap()
+        .expect("main worktree policy");
+    // `find` resolves the main root (macOS `/var` → `/private/var`, Windows
+    // verbatim paths), so the expected path is the canonical one.
+    let canonical_main = fs::canonicalize(&main).unwrap();
+    assert_eq!(
+        found.path,
+        canonical_main.join(home::DIR_NAME).join("policy.yaml"),
+    );
+    assert_eq!(found.root, root_key(&main).unwrap());
+}

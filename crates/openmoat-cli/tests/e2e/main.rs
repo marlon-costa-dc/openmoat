@@ -25,6 +25,7 @@ mod cli;
 mod cline;
 mod closed_pipe;
 mod codex;
+mod codex_hooks_only;
 mod config_change;
 mod continue_cli;
 mod copilot_cli;
